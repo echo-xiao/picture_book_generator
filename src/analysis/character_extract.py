@@ -169,11 +169,36 @@ def extract_characters(
     nlp = _get_nlp()
     doc = nlp(text)
 
-    # Non-character names to filter out
+    # Non-character names to filter out (common words spaCy misclassifies as PERSON)
     _SKIP_NAMES = {
-        "god", "jesus", "christ", "sir", "mr", "mrs", "miss", "dr",
-        "chapter", "part", "section", "table", "contents", "page",
+        # Titles/honorifics
+        "god", "jesus", "christ", "sir", "mr", "mrs", "miss", "dr", "lord", "lady",
+        "king", "queen", "prince", "princess", "majesty", "monseigneur",
+        # Document structure
+        "chapter", "part", "section", "table", "contents", "page", "book",
+        # Common nouns/adjectives/verbs spaCy misclassifies
+        "guilty", "dead", "afraid", "proud", "noble", "calm", "dusk",
+        "hope", "nature", "virtue", "grace", "angel", "soul", "fate",
+        "kiss", "hush", "hurry", "farewell", "adieu", "drop", "rip",
+        "fire", "wolf", "sheep", "cook", "farmer", "barber", "nephew",
+        "villain", "aristocrats", "citizen", "gentleman", "englishman",
+        "accused", "condemned", "mischief", "treason", "legislation",
+        "royalty", "comedy", "dolt", "barrier", "keys", "vapour",
+        "louder", "boldface", "gazette", "gore",
+        # Exclamations/sounds
+        "bah", "yo", "hooray", "hooroar", "yaha", "tst",
+        # Place names commonly misclassified
+        "calais", "boulogne", "gaul", "soho",
     }
+
+    # Additional filter: single-word "names" that are too common to be characters
+    _COMMON_ENGLISH_WORDS = {
+        "may", "march", "jack", "bill", "will", "mark", "nick", "tom",
+        "joe", "ben", "drew", "pat", "rob", "sue", "art", "dawn",
+        "eve", "ray", "joy", "faith", "law", "ward",
+    }
+    # Only filter single-word common names if they have very few mentions
+    # (real characters named "Tom" will have many mentions)
 
     # Collect all PERSON entities
     raw_names: list[str] = []
@@ -193,6 +218,28 @@ def extract_characters(
 
     if not raw_names:
         return []
+
+    # Post-filter: remove names that are clearly not characters
+    filtered_names = []
+    for name in raw_names:
+        words = name.split()
+        # Skip single-character or number-like names
+        if len(name) < 3:
+            continue
+        # Skip names with punctuation inside (e.g., "D. I. C", "I. '", "Cruncher!--Don'T")
+        if any(c in name for c in "!@#$%^&*(){}[]|\\<>?/~`"):
+            continue
+        # Skip names that are ALL CAPS (likely headings)
+        if name == name.upper() and len(name) > 3:
+            continue
+        # Skip single common English words with low mention potential
+        if len(words) == 1 and name.lower() in _COMMON_ENGLISH_WORDS:
+            # Only keep if it appears many times (likely a real character)
+            count_in_raw = sum(1 for n in raw_names if _normalize_name(n) == name)
+            if count_in_raw < 5:
+                continue
+        filtered_names.append(name)
+    raw_names = filtered_names
 
     # Merge aliases
     alias_map = _merge_aliases(list(set(raw_names)))

@@ -268,17 +268,13 @@ def generate_chapter(
             "image_path": ill.get("image_path", ""),
         })
 
-    # Get cover image
-    cover_image = ""
-    special_dir = GENERATED_DIR / book_id / "special"
-    for ext in (".png", ".jpg"):
-        candidate = special_dir / f"book_cover{ext}"
-        if candidate.exists():
-            cover_image = str(candidate)
-            break
-
+    special_dir = str(GENERATED_DIR / book_id / "special")
     pdf_path = str(GENERATED_DIR / book_id / "book.pdf")
-    export_pdf(pdf_pages, f"{title} - {ch_title}", pdf_path, cover_image=cover_image)
+    export_pdf(
+        pdf_pages, f"{title} - {ch_title}", pdf_path,
+        special_dir=special_dir,
+        chapter_num=chapter_idx + 1,
+    )
     print(f"\n=== Done! ===")
     print(f"  PDF: {pdf_path}")
     print(f"  Pages: {len(pdf_pages)}")

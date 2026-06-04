@@ -97,36 +97,21 @@ Do NOT include any text or labels."""
 
 # Predefined visual identities — ensures each character looks completely different
 _VISUAL_IDENTITIES = [
-    {
-        "hair": "short straight dark brown hair",
-        "outfit": "bright red sweater and blue jeans",
-        "feature": "round glasses",
-        "colors": "red, blue, brown",
-    },
-    {
-        "hair": "long curly golden blonde hair with a big pink bow",
-        "outfit": "yellow polka-dot dress with white collar",
-        "feature": "rosy cheeks and a tiny mole near her mouth",
-        "colors": "yellow, pink, white",
-    },
-    {
-        "hair": "short spiky ginger/orange hair",
-        "outfit": "green polo shirt and khaki shorts",
-        "feature": "freckles across nose and cheeks",
-        "colors": "green, orange, khaki",
-    },
-    {
-        "hair": "sleek black bob haircut",
-        "outfit": "purple turtleneck and dark pants",
-        "feature": "sharp confident eyes, athletic posture",
-        "colors": "purple, black",
-    },
-    {
-        "hair": "wavy light brown hair, slightly messy",
-        "outfit": "blue blazer with white shirt and brown boots",
-        "feature": "friendly smile, slightly shy posture",
-        "colors": "blue, white, brown",
-    },
+    {"hair": "short straight dark brown hair", "outfit": "bright red sweater and blue jeans", "feature": "round glasses", "colors": "red, blue, brown"},
+    {"hair": "long curly golden blonde hair with a big pink bow", "outfit": "yellow polka-dot dress with white collar", "feature": "rosy cheeks and a tiny mole near her mouth", "colors": "yellow, pink, white"},
+    {"hair": "short spiky ginger/orange hair", "outfit": "green polo shirt and khaki shorts", "feature": "freckles across nose and cheeks", "colors": "green, orange, khaki"},
+    {"hair": "sleek black bob haircut", "outfit": "purple turtleneck and dark pants", "feature": "sharp confident eyes, athletic posture", "colors": "purple, black"},
+    {"hair": "wavy light brown hair, slightly messy", "outfit": "blue blazer with white shirt and brown boots", "feature": "friendly smile, slightly shy posture", "colors": "blue, white, brown"},
+    {"hair": "long straight silver-white hair in a ponytail", "outfit": "dark green coat with gold buttons", "feature": "thin mustache, tall and dignified", "colors": "green, gold, silver"},
+    {"hair": "curly dark red hair with a headband", "outfit": "orange overalls with a striped shirt", "feature": "big dimples, gap in front teeth", "colors": "orange, red, white"},
+    {"hair": "short neat black hair, parted to the side", "outfit": "grey vest over light blue shirt, dark trousers", "feature": "wire-rimmed glasses, serious expression", "colors": "grey, blue, black"},
+    {"hair": "long wavy auburn hair, loose", "outfit": "teal dress with lace trim", "feature": "a small scar on her chin, kind eyes", "colors": "teal, cream, auburn"},
+    {"hair": "buzzcut sandy hair", "outfit": "brown leather jacket and dark jeans", "feature": "broad shoulders, square jaw", "colors": "brown, tan, dark blue"},
+    {"hair": "thick curly black hair, big and fluffy", "outfit": "pink cardigan with flower embroidery", "feature": "round face, always smiling", "colors": "pink, black, green"},
+    {"hair": "straight platinum blonde hair, shoulder length", "outfit": "navy sailor suit with white stripes", "feature": "pale blue eyes, pointed nose", "colors": "navy, white, blonde"},
+    {"hair": "messy dark brown curls under a flat cap", "outfit": "patched brown waistcoat and rolled-up sleeves", "feature": "smudgy face, mischievous grin", "colors": "brown, beige, grey"},
+    {"hair": "neat grey hair in a bun", "outfit": "maroon shawl over a cream blouse", "feature": "wrinkled smile, reading spectacles on chain", "colors": "maroon, cream, grey"},
+    {"hair": "shaggy dirty blonde hair", "outfit": "olive military-style jacket and cargo pants", "feature": "bandaged hand, intense stare", "colors": "olive, blonde, khaki"},
 ]
 
 
@@ -224,33 +209,35 @@ def generate_character_sheets(
     character_profiles: list[dict],
     book_id: str,
     style: str | None = None,
-    max_characters: int = 5,
+    max_characters: int = 0,
 ) -> list[dict]:
-    """Generate character reference sheets for main characters.
+    """Generate character reference sheets for ALL main/supporting characters.
 
     Args:
-        character_profiles: Character profile dicts from NLP analysis,
-            each with name, appearance, personality_traits, role, etc.
+        character_profiles: Character profile dicts from NLP analysis.
         book_id: Book identifier for file storage.
         style: Optional style override.
-        max_characters: Max number of characters to generate sheets for.
+        max_characters: Max characters (0 = no limit, generate all main+supporting).
 
     Returns:
-        List of dicts: {character_name, sheet_path, description, prompt_used}
+        List of dicts with character_name, sheet_path, description, background, etc.
     """
     client = _get_client()
     active_style = style or DEFAULT_STYLE
     output_dir = GENERATED_DIR / book_id / "characters"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Filter to main/supporting characters only, limit count
+    # Filter to main/supporting characters only
     main_chars = [
         p for p in character_profiles
         if p.get("role") in ("main", "supporting")
-    ][:max_characters]
+    ]
 
     if not main_chars:
-        main_chars = character_profiles[:max_characters]
+        main_chars = character_profiles[:10]  # fallback
+
+    if max_characters > 0:
+        main_chars = main_chars[:max_characters]
 
     if not main_chars:
         logger.warning("No character profiles provided for sheet generation")
@@ -320,14 +307,30 @@ def generate_character_sheets(
             actual_path = _add_labels_to_sheet(actual_path, name, profile)
 
         results.append({
-            "character_name": name,
-            "sheet_path": actual_path,
-            "description": description or f"Character sheet for {name}",
-            "prompt_used": prompt[:500],
-            "appearance": profile.get("appearance", []),
-            "traits": profile.get("personality_traits", []),
-            "visual_identity": profile.get("visual_identity", ""),
-            "visual_colors": profile.get("visual_colors", ""),
-        })
+            # Build background from available profile data
+            role = profile.get("role", "unknown")
+            traits = profile.get("personality_traits", [])
+            co_chars = profile.get("co_occurring_characters", {})
+            top_relations = sorted(co_chars.items(), key=lambda x: x[1], reverse=True)[:3] if co_chars else []
+            relations_str = ", ".join(f"{k} ({v} scenes together)" for k, v in top_relations)
+
+            background = (
+                f"{name} is a {role} character. "
+                f"Personality: {', '.join(traits[:4]) if traits else 'not specified'}. "
+                f"Often appears with: {relations_str or 'various characters'}."
+            )
+
+            results.append({
+                "character_name": name,
+                "sheet_path": actual_path,
+                "description": description or f"Character sheet for {name}",
+                "background": background,
+                "role": role,
+                "prompt_used": prompt[:500],
+                "appearance": profile.get("appearance", []),
+                "traits": traits,
+                "visual_identity": profile.get("visual_identity", ""),
+                "visual_colors": profile.get("visual_colors", ""),
+            })
 
     return results
