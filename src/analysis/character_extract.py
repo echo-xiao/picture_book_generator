@@ -187,8 +187,16 @@ def extract_characters(
         "louder", "boldface", "gazette", "gore",
         # Exclamations/sounds
         "bah", "yo", "hooray", "hooroar", "yaha", "tst",
-        # Place names commonly misclassified
-        "calais", "boulogne", "gaul", "soho",
+        # Place names / institutions commonly misclassified
+        "calais", "boulogne", "gaul", "soho", "tellson", "whitefriars",
+        # Objects / concepts
+        "guillotine", "bust", "ghost", "messenger", "porter", "spy",
+        "blacksmith", "sawyer", "shooter", "ogreish", "bench",
+        "lucifer", "judas", "brutus", "samson",
+        # Time/date references
+        "michaelmas", "anno", "dominoe",
+        # Nationalities/roles
+        "briton", "jacobin",
     }
 
     # Additional filter: single-word "names" that are too common to be characters

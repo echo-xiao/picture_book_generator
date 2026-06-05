@@ -227,17 +227,23 @@ def generate_character_sheets(
     output_dir = GENERATED_DIR / book_id / "characters"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Filter to main/supporting characters only
+    # Filter to real characters: main/supporting with enough mentions
+    MIN_MENTIONS = 5  # Must appear at least 5 times to get a sheet
     main_chars = [
         p for p in character_profiles
         if p.get("role") in ("main", "supporting")
+        and p.get("mention_count", 0) >= MIN_MENTIONS
     ]
 
     if not main_chars:
-        main_chars = character_profiles[:10]  # fallback
+        # Fallback: top characters by mention count
+        main_chars = sorted(character_profiles, key=lambda p: p.get("mention_count", 0), reverse=True)[:10]
 
     if max_characters > 0:
         main_chars = main_chars[:max_characters]
+
+    logger.info("Generating sheets for %d characters (filtered from %d profiles, min %d mentions)",
+                len(main_chars), len(character_profiles), MIN_MENTIONS)
 
     if not main_chars:
         logger.warning("No character profiles provided for sheet generation")
@@ -306,31 +312,30 @@ def generate_character_sheets(
         if actual_path:
             actual_path = _add_labels_to_sheet(actual_path, name, profile)
 
+        # Build background from available profile data
+        role = profile.get("role", "unknown")
+        traits = profile.get("personality_traits", [])
+        co_chars = profile.get("co_occurring_characters", {})
+        top_relations = sorted(co_chars.items(), key=lambda x: x[1], reverse=True)[:3] if co_chars else []
+        relations_str = ", ".join(f"{k} ({v} scenes together)" for k, v in top_relations)
+
+        background = (
+            f"{name} is a {role} character. "
+            f"Personality: {', '.join(traits[:4]) if traits else 'not specified'}. "
+            f"Often appears with: {relations_str or 'various characters'}."
+        )
+
         results.append({
-            # Build background from available profile data
-            role = profile.get("role", "unknown")
-            traits = profile.get("personality_traits", [])
-            co_chars = profile.get("co_occurring_characters", {})
-            top_relations = sorted(co_chars.items(), key=lambda x: x[1], reverse=True)[:3] if co_chars else []
-            relations_str = ", ".join(f"{k} ({v} scenes together)" for k, v in top_relations)
-
-            background = (
-                f"{name} is a {role} character. "
-                f"Personality: {', '.join(traits[:4]) if traits else 'not specified'}. "
-                f"Often appears with: {relations_str or 'various characters'}."
-            )
-
-            results.append({
-                "character_name": name,
-                "sheet_path": actual_path,
-                "description": description or f"Character sheet for {name}",
-                "background": background,
-                "role": role,
-                "prompt_used": prompt[:500],
-                "appearance": profile.get("appearance", []),
-                "traits": traits,
-                "visual_identity": profile.get("visual_identity", ""),
-                "visual_colors": profile.get("visual_colors", ""),
-            })
+            "character_name": name,
+            "sheet_path": actual_path,
+            "description": description or f"Character sheet for {name}",
+            "background": background,
+            "role": role,
+            "prompt_used": prompt[:500],
+            "appearance": profile.get("appearance", []),
+            "traits": traits,
+            "visual_identity": profile.get("visual_identity", ""),
+            "visual_colors": profile.get("visual_colors", ""),
+        })
 
     return results

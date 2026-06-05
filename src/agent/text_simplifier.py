@@ -53,6 +53,10 @@ for ages {age_group}.
 - CRITICAL: Stay faithful to the original text. Do NOT invent new events, objects, \
 or characters that are not in the original. Adapt what's there, don't make things up.
 - If the original scene has dialogue, try to keep the essence of that dialogue.
+- If a page has a "setup_context", use it to introduce the story on page 1 \
+(e.g., "Once upon a time, in a big city called Paris...")
+- If a page has a "story_beat", follow that beat to maintain story coherence across pages.
+- A child who has NEVER read this book should be able to follow the story.
 
 ## Original Story Context (adapt freely, don't copy)
 {original_text}
@@ -141,17 +145,24 @@ def simplify_text(
             chars.append(f"- {name} ({role}): {', '.join(traits[:3])}")
         chars_info = "\n".join(chars)
 
-    # Pass full original text of each selected scene, not just the summary
+    # Pass full original text of each selected scene with story context
     scenes_data = []
     for s in scenes:
         full_scene_text = s.get("original_text", s.get("text", s.get("scene_summary", "")))
-        scenes_data.append({
+        entry = {
             "page": s.get("page_number"),
-            "original_text": full_scene_text[:800],  # enough context, not just 1 sentence
+            "original_text": full_scene_text[:800],
             "scene_summary": s.get("scene_summary", "")[:200],
             "characters_present": s.get("key_characters", []),
             "emotional_tone": s.get("emotional_tone", ""),
-        })
+        }
+        # Include story beat from outline (if available)
+        if s.get("story_beat"):
+            entry["story_beat"] = s["story_beat"]
+        # Include setup context for first page
+        if s.get("setup_context"):
+            entry["setup_context"] = s["setup_context"]
+        scenes_data.append(entry)
 
     prompt = REWRITE_PROMPT.format(
         num_pages=len(scenes),

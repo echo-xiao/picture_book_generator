@@ -143,6 +143,45 @@ def generate_chapter(
     from src.generation.illustration import generate_illustrations
     from src.renderer.pdf_export import export_pdf
 
+    # Step logger for saving intermediate results
+    steps_dir = GENERATED_DIR / book_id / "steps"
+    steps_dir.mkdir(parents=True, exist_ok=True)
+    _step_num = [0]
+
+    def _save_step(name: str, data_to_save: any, duration_s: float = 0):
+        _step_num[0] += 1
+        step_file = steps_dir / f"{_step_num[0]:02d}_{name}.json"
+        doc = {
+            "step": _step_num[0],
+            "name": name,
+            "duration_s": round(duration_s, 1),
+        }
+        # Handle different data types
+        if isinstance(data_to_save, (dict, list)):
+            doc["data"] = data_to_save
+        else:
+            doc["data"] = str(data_to_save)
+        # Truncate large text fields for readability
+        import copy
+        truncated = copy.deepcopy(doc)
+        _truncate(truncated, max_str=2000)
+        step_file.write_text(
+            json.dumps(truncated, indent=2, default=str, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print(f"  [saved] {step_file.name}")
+
+    def _truncate(obj, max_str=2000):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if isinstance(v, str) and len(v) > max_str:
+                    obj[k] = v[:max_str] + f"... ({len(v)} chars)"
+                else:
+                    _truncate(v, max_str)
+        elif isinstance(obj, list):
+            for item in obj:
+                _truncate(item, max_str)
+
     analysis = data.get("analysis", {})
     characters = analysis.get("characters", [])
     profiles = analysis.get("character_profiles", [])
@@ -185,46 +224,130 @@ def generate_chapter(
         print("  No pages to generate.")
         return
 
-    # Step 1: Character sheets (check if already exist)
-    ch_dir = GENERATED_DIR / book_id / "characters"
-    existing_sheets = list(ch_dir.glob("*_sheet.*")) if ch_dir.exists() else []
+    # Step 1: Character sheets — only for characters appearing in THIS chapter
+    # Find which characters appear in this chapter's text
+    chapter_text_lower = " ".join(s.get("original_text", "") for s in scenes).lower()
+    chapter_chars = []
+    for p in profiles:
+        name = p.get("name", "")
+        if not name:
+            continue
+        # Check if character name or first name appears in chapter text
+        name_lower = name.lower()
+        first_name = name_lower.split()[0]
+        if name_lower in chapter_text_lower or (len(first_name) >= 3 and first_name in chapter_text_lower):
+            chapter_chars.append(p)
 
-    if existing_sheets:
-        print(f"\n[1/5] Character sheets: using {len(existing_sheets)} existing sheets")
-        # Load sheet info
-        main_chars = [p for p in profiles if p.get("role") in ("main", "supporting")][:5]
-        if not main_chars:
-            main_chars = profiles[:5]
-        main_chars = _assign_visual_identities(main_chars)
-        character_sheets = []
-        for p in main_chars:
-            from src.generation.character_sheet import _safe_filename
-            safe = _safe_filename(p.get("name", ""))
-            for ext in (".png", ".jpg"):
-                sheet_path = ch_dir / f"{safe}_sheet{ext}"
-                if sheet_path.exists():
-                    character_sheets.append({
-                        "character_name": p["name"],
-                        "sheet_path": str(sheet_path),
-                        "visual_identity": p.get("visual_identity", ""),
-                    })
-                    break
-    else:
-        print(f"\n[1/5] Generating character sheets...")
+    print(f"\n[1/5] Characters in this chapter: {len(chapter_chars)}")
+    for c in chapter_chars:
+        print(f"    - {c.get('name')} ({c.get('role', '?')})")
+
+    # Generate sheets only for chapter characters (reuse existing ones)
+    from src.generation.character_sheet import _safe_filename
+    ch_dir = GENERATED_DIR / book_id / "characters"
+    chapter_chars = _assign_visual_identities(chapter_chars)
+    character_sheets = []
+    chars_to_generate = []
+
+    for p in chapter_chars:
+        safe = _safe_filename(p.get("name", ""))
+        existing = None
+        for ext in (".png", ".jpg"):
+            sheet_path = ch_dir / f"{safe}_sheet{ext}"
+            if sheet_path.exists():
+                existing = str(sheet_path)
+                break
+        if existing:
+            character_sheets.append({
+                "character_name": p["name"],
+                "sheet_path": existing,
+                "visual_identity": p.get("visual_identity", ""),
+                "background": p.get("background", ""),
+            })
+        else:
+            chars_to_generate.append(p)
+
+    if chars_to_generate:
+        print(f"  Generating {len(chars_to_generate)} new sheets (reusing {len(character_sheets)} existing)...")
         t0 = time.time()
-        character_sheets = generate_character_sheets(profiles, book_id)
-        print(f"  Generated {len(character_sheets)} sheets in {time.time() - t0:.1f}s")
+        new_sheets = generate_character_sheets(chars_to_generate, book_id)
+        character_sheets.extend(new_sheets)
+        dt = time.time() - t0
+        print(f"  Generated {len(new_sheets)} sheets in {dt:.1f}s")
+    else:
+        dt = 0
+        print(f"  All {len(character_sheets)} sheets already exist")
+    _save_step("character_sheets", [
+        {"name": s["character_name"], "path": s.get("sheet_path", ""),
+         "visual_identity": s.get("visual_identity", ""), "background": s.get("background", "")}
+        for s in character_sheets
+    ], dt)
+
+    # Step 1.5: Generate chapter story outline (LLM) for coherent rewriting
+    print(f"\n[1.5/5] Generating chapter story outline...")
+    t0 = time.time()
+    from src.agent.gemini_client import generate_json as _gen_json
+    chapter_original = "\n".join(s.get("original_text", "")[:500] for s in scenes)
+    char_list = ", ".join(c.get("name", "") for c in chapter_chars[:8])
+    outline_prompt = f"""You are adapting a chapter of a classic novel into a children's picture book.
+
+CHAPTER: {ch_title}
+BOOK: {title}
+CHARACTERS IN THIS CHAPTER: {char_list}
+
+CHAPTER TEXT (excerpts from {len(scenes)} segments):
+{chapter_original[:8000]}
+
+Generate a coherent STORY OUTLINE for this chapter as a children's picture book.
+The outline must:
+1. Start with a brief SETUP that introduces the setting and characters (even if the reader hasn't read previous chapters)
+2. Have a clear beginning, middle, and end within this chapter
+3. Be understandable by a child who has NEVER read this book before
+4. Include {len(scenes)} story beats (one per page)
+
+Return JSON:
+{{"chapter_summary": "2-3 sentence summary of what happens",
+  "setup_context": "1-2 sentences a child needs to know before this chapter starts",
+  "story_beats": [
+    {{"page": 1, "beat": "what happens on this page in 1 sentence"}}
+  ]
+}}"""
+    try:
+        outline = _gen_json(outline_prompt)
+    except Exception as e:
+        logger.warning("Outline generation failed: %s", e)
+        outline = {"chapter_summary": "", "setup_context": "", "story_beats": []}
+    dt = time.time() - t0
+    print(f"  Summary: {outline.get('chapter_summary', 'N/A')[:120]}")
+    print(f"  Setup: {outline.get('setup_context', 'N/A')[:120]}")
+    print(f"  Done in {dt:.1f}s")
+    _save_step("chapter_outline", outline, dt)
+
+    # Inject outline context into scenes for better rewriting
+    setup_context = outline.get("setup_context", "")
+    story_beats = outline.get("story_beats", [])
+    beat_map = {b.get("page", 0): b.get("beat", "") for b in story_beats}
+    for s in scenes:
+        pn = s.get("page_number", 0)
+        s["story_beat"] = beat_map.get(pn, "")
+        if pn == 1 and setup_context:
+            s["setup_context"] = setup_context
 
     # Step 2: Simplify text
     print(f"\n[2/5] Simplifying text ({len(scenes)} pages)...")
     t0 = time.time()
     simplified = simplify_text(scenes, age_group, full_text, characters=profiles[:5])
-    print(f"  Done in {time.time() - t0:.1f}s")
+    dt = time.time() - t0
+    print(f"  Done in {dt:.1f}s")
+    _save_step("simplified_text", [
+        {"page": s.get("page_number"), "text": s.get("page_text", ""),
+         "scene_direction": s.get("scene_direction", "")}
+        for s in simplified
+    ], dt)
 
     # Step 3: Generate illustration prompts
     print(f"\n[3/5] Generating illustration prompts...")
     t0 = time.time()
-    # Convert sheets to profile format for prompter
     sheet_profiles = [
         {
             "name": s["character_name"],
@@ -235,7 +358,12 @@ def generate_chapter(
     ]
     prompts_result = generate_illustration_prompts(simplified, sheet_profiles)
     page_prompts = prompts_result.get("page_prompts", [])
-    print(f"  Generated {len(page_prompts)} prompts in {time.time() - t0:.1f}s")
+    dt = time.time() - t0
+    print(f"  Generated {len(page_prompts)} prompts in {dt:.1f}s")
+    _save_step("illustration_prompts", [
+        {"page": p.get("page_number"), "prompt": p.get("prompt", "")[:300]}
+        for p in page_prompts
+    ], dt)
 
     # Merge scene data into page prompts
     scene_map = {s.get("page_number", i + 1): s for i, s in enumerate(simplified)}
@@ -250,12 +378,20 @@ def generate_chapter(
     print(f"\n[4/5] Generating illustrations ({len(page_prompts)} pages)...")
     t0 = time.time()
     illustrations = generate_illustrations(page_prompts, character_sheets, book_id)
-    print(f"  Generated {len(illustrations)} illustrations in {time.time() - t0:.1f}s")
+    dt = time.time() - t0
+    print(f"  Generated {len(illustrations)} illustrations in {dt:.1f}s")
+    _save_step("illustrations", [
+        {"page": ill.get("page_number"), "path": ill.get("image_path", ""),
+         "consistency": ill.get("consistency_score", -1)}
+        for ill in illustrations
+    ], dt)
 
     # Step 5: Special pages + PDF
     if with_special:
         print(f"\n[5/5] Generating special pages + PDF...")
+        t0 = time.time()
         generate_special_pages(book_id, data, chapter_idx)
+        _save_step("special_pages", {"chapter": chapter_idx, "with_special": True}, time.time() - t0)
     else:
         print(f"\n[5/5] Generating PDF...")
 
@@ -275,6 +411,7 @@ def generate_chapter(
         special_dir=special_dir,
         chapter_num=chapter_idx + 1,
     )
+    _save_step("pdf_export", {"path": pdf_path, "num_pages": len(pdf_pages)})
     print(f"\n=== Done! ===")
     print(f"  PDF: {pdf_path}")
     print(f"  Pages: {len(pdf_pages)}")
