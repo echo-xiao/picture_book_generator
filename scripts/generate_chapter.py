@@ -169,6 +169,26 @@ def generate_chapter(
             json.dumps(truncated, indent=2, default=str, ensure_ascii=False),
             encoding="utf-8",
         )
+        # Also save to MongoDB
+        try:
+            import pymongo
+            from src.config import MONGODB_URI, MONGODB_DB
+            client = pymongo.MongoClient(MONGODB_URI, serverSelectionTimeoutMS=3000)
+            db = client[MONGODB_DB]
+            mongo_doc = {
+                "book_id": book_id,
+                "step": _step_num[0],
+                "name": name,
+                "duration_s": round(duration_s, 1),
+                "data": truncated.get("data"),
+            }
+            db.steps.update_one(
+                {"book_id": book_id, "step": _step_num[0], "name": name},
+                {"$set": mongo_doc}, upsert=True,
+            )
+            client.close()
+        except Exception:
+            pass  # MongoDB is best-effort
         print(f"  [saved] {step_file.name}")
 
     def _truncate(obj, max_str=2000):

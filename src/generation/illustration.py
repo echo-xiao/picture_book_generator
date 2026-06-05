@@ -275,12 +275,17 @@ def generate_illustrations(
         best_score = -1.0
         best_prompt = ""
 
+        gemini_feedback = ""  # Accumulate feedback from Gemini self-check
+
         for attempt in range(max_consistency_retries + 1):
             # Generate
             if attempt > 0:
                 save_path_retry = output_dir / f"page_{page_num:03d}_v{attempt}"
                 logger.info("Page %d: regenerating (attempt %d, prev score=%.3f)",
                            page_num, attempt + 1, best_score)
+                # If we have Gemini feedback, inject it into the page for better retry
+                if gemini_feedback:
+                    page = {**page, "prompt": page.get("prompt", "") + f"\n\nFIX REQUIRED: {gemini_feedback}"}
             else:
                 save_path_retry = save_path
 
@@ -291,7 +296,7 @@ def generate_illustrations(
             if not success:
                 continue
 
-            # Check consistency with CLIP
+            # Check consistency with CLIP first (fast)
             if CLIP_AVAILABLE and valid_sheets:
                 result = check_consistency(
                     [{"page_number": page_num, "image_path": image_path}],
@@ -299,10 +304,25 @@ def generate_illustrations(
                 )
                 score = result.get("per_page_scores", [-1])[0]
             else:
-                score = 1.0  # Skip check if CLIP not available
+                score = 1.0
 
-            logger.info("Page %d attempt %d: consistency score=%.3f (threshold=%.2f)",
+            logger.info("Page %d attempt %d: CLIP score=%.3f (threshold=%.2f)",
                        page_num, attempt + 1, score, consistency_threshold)
+
+            # Gemini Vision self-check (more accurate, runs after CLIP)
+            if valid_sheets and score < consistency_threshold and attempt < max_consistency_retries:
+                try:
+                    from src.generation.gemini_consistency_check import check_character_consistency
+                    gemini_result = check_character_consistency(image_path, valid_sheets, page_num)
+                    if not gemini_result.get("consistent", True):
+                        gemini_feedback = gemini_result.get("feedback", "")
+                        logger.info("Page %d Gemini check: inconsistent — %s",
+                                   page_num, "; ".join(gemini_result.get("issues", [])[:2]))
+                    else:
+                        gemini_feedback = ""
+                        score = max(score, gemini_result.get("score", score))
+                except Exception as e:
+                    logger.debug("Gemini self-check skipped: %s", e)
 
             # Keep the best version
             if score > best_score:
