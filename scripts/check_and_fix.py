@@ -186,6 +186,7 @@ def main():
     parser.add_argument("--book", required=True, help="Book ID")
     parser.add_argument("--pages", type=str, default=None, help="Comma-separated page numbers")
     parser.add_argument("--fix", action="store_true", help="Auto-regenerate inconsistent pages")
+    parser.add_argument("--max-rounds", type=int, default=3, help="Max fix rounds (default: 3)")
     args = parser.parse_args()
 
     page_numbers = None
@@ -195,7 +196,27 @@ def main():
     results = check_pages(args.book, page_numbers)
 
     if args.fix and results:
-        fix_pages(args.book, results)
+        for round_num in range(1, args.max_rounds + 1):
+            inconsistent = [r for r in results if not r["consistent"]]
+            if not inconsistent:
+                print(f"\n=== All pages consistent! ===")
+                break
+
+            print(f"\n--- Fix round {round_num}/{args.max_rounds} ({len(inconsistent)} pages) ---")
+            fix_pages(args.book, results)
+
+            # Re-check the fixed pages
+            bad_pages = [r["page_number"] for r in inconsistent]
+            print(f"\nRe-checking pages {bad_pages}...")
+            results = check_pages(args.book, bad_pages)
+
+            if all(r["consistent"] for r in results):
+                print(f"\n=== All fixed after {round_num} round(s)! ===")
+                break
+        else:
+            still_bad = [r["page_number"] for r in results if not r["consistent"]]
+            if still_bad:
+                print(f"\n=== {len(still_bad)} pages still inconsistent after {args.max_rounds} rounds: {still_bad} ===")
 
 
 if __name__ == "__main__":
