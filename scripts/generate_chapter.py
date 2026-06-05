@@ -307,7 +307,17 @@ def generate_chapter(
     print(f"\n[1.5/5] Generating chapter story outline...")
     t0 = time.time()
     from src.agent.gemini_client import generate_json as _gen_json
-    chapter_original = "\n".join(s.get("original_text", "")[:500] for s in scenes)
+    # Pass full text of each segment (no truncation per segment)
+    # But cap total at 30000 chars to stay within Gemini context
+    chapter_parts = []
+    total_chars = 0
+    for s in scenes:
+        text = s.get("original_text", "")
+        if total_chars + len(text) > 30000:
+            break
+        chapter_parts.append(text)
+        total_chars += len(text)
+    chapter_original = "\n".join(chapter_parts)
     char_list = ", ".join(c.get("name", "") for c in chapter_chars[:8])
     outline_prompt = f"""You are adapting a chapter of a classic novel into a children's picture book.
 
