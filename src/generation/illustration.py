@@ -141,17 +141,17 @@ CONSISTENCY IS THE #1 PRIORITY:
 - If a character has a red sweater, they MUST have a red sweater in EVERY scene
 - Do NOT change any character's appearance — refer to the character sheets above
 
-CHARACTER NAME LABELS:
-- Add a small name tag near each character's feet or below them
-- Style: a small colored ribbon or wooden sign — NOT a speech bubble, NOT a dialogue box
-- Example: a tiny curved ribbon with "Mr. Lorry" written on it, placed below the character
-- Name labels must look DIFFERENT from dialogue and narration text
-- Make sure the name spelling is CORRECT
+CHARACTER NAME LABELS (MANDATORY for every named character):
+- Add a LARGE, CLEAR colored ribbon or banner BELOW each named character
+- The name must be BIG ENOUGH for a child to read easily
+- Style: bright colored ribbon with bold text — NOT a speech bubble
+- Place it directly below each character so it's obvious who is who
+- A child seeing this page for the first time must immediately know each character's name
 
-TEXT STYLE GUIDE (3 distinct styles, must be visually different):
-1. CHARACTER NAMES → small ribbons/signs BELOW characters (subtle, small font)
-2. DIALOGUE → speech bubbles with tails pointing to the speaker
-3. NARRATION → scrolls, banners, or cloud shapes at top/bottom of page
+TEXT STYLE GUIDE (3 distinct styles, must be visually VERY different):
+1. CHARACTER NAMES → LARGE bright colored ribbons BELOW each character (bold, big font)
+2. DIALOGUE → speech bubbles with tails pointing to the speaker (white background)
+3. NARRATION → scrolls, banners, or cloud shapes at top/bottom of page (parchment color)
 
 TEXT IN IMAGE:
 - Embed the story text naturally into the illustration as part of the art
@@ -238,7 +238,7 @@ def generate_illustrations(
     book_id: str,
     style_ref_path: str | None = None,
     consistency_threshold: float = 0.55,
-    max_consistency_retries: int = 2,
+    max_consistency_retries: int = 5,
 ) -> list[dict]:
     """Generate illustrations with automatic consistency checking.
 

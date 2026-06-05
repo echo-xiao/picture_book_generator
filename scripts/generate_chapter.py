@@ -334,7 +334,12 @@ Return JSON:
   ]
 }}
 
-IMPORTANT: If this chapter contains famous or iconic quotes (e.g., "It was the best of times, it was the worst of times"), include them in famous_quotes and work them into the appropriate story beat."""
+CRITICAL — FAMOUS QUOTES:
+- Search the ENTIRE chapter text above for any famous, iconic, or widely-recognized lines
+- The opening lines of each chapter are especially likely to be famous
+- "It was the best of times, it was the worst of times" is one of the most famous opening lines in all of English literature — if this text appears, it MUST be in famous_quotes
+- Include the EXACT original English quote, not a paraphrase
+- These quotes will be displayed prominently in the picture book"""
     try:
         outline = _gen_json(outline_prompt)
     except Exception as e:
