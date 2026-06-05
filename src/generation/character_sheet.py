@@ -65,7 +65,7 @@ def _build_sheet_prompt(profile: dict, style: str, all_profiles: list[dict] | No
             )
             other_chars = f"\nOTHER CHARACTERS (this character must look DIFFERENT from them): {other_desc}"
 
-    prompt = f"""Character Reference Sheet for children's picture book.
+    prompt = f"""Detailed Character Reference Sheet for children's picture book.
 
 CHARACTER NAME: {name}
 ROLE: {role}
@@ -84,15 +84,30 @@ CRITICAL RULES:
 - CLOTHING MUST match the historical period of the story (e.g., 1780s France = frock coats, bonnets, cravats; NOT modern clothes like hoodies or jeans)
 - If book descriptions mention specific clothing or appearance, follow them exactly.
 
-Draw on a clean WHITE background:
-1. FRONT VIEW — full body, arms slightly out
+Draw on a clean WHITE background, organized in a clear grid layout:
+
+ROW 1 — FULL BODY VIEWS:
+1. FRONT VIEW — full body, arms slightly out, showing complete outfit
 2. THREE-QUARTER VIEW — full body, turned right
 3. SIDE VIEW — profile facing right
-4. FOUR EXPRESSIONS — head only: Happy, Sad, Surprised, Angry
+
+ROW 2 — CLOSE-UP DETAILS:
+4. FACE CLOSE-UP — showing hair style, eye color, facial features clearly
+5. OUTFIT CLOSE-UP — chest/torso area showing clothing details: buttons, collar, fabric pattern, scarf, tie, brooch, etc.
+6. ACCESSORIES CLOSE-UP — hat, glasses, gloves, bag, shoes, or other distinctive items (draw only items this character has)
+
+ROW 3 — EXPRESSIONS:
+7. Happy expression (head only)
+8. Sad expression (head only)
+9. Surprised expression (head only)
+10. Angry expression (head only)
+
+BOTTOM — COLOR PALETTE:
+Draw 4-5 colored circles showing this character's exact colors (hair, skin, outfit main color, outfit accent color, accessory color)
 
 Style: {style}
 Do NOT include: {NEGATIVE_PROMPT}
-Do NOT include any text or labels."""
+Label each section with small text (e.g., "FRONT", "SIDE", "OUTFIT", "Happy")."""
 
     return prompt
 
