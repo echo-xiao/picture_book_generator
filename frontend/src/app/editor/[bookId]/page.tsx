@@ -1001,11 +1001,11 @@ export default function EditorPage() {
                   const sceneChars = selectedSegment?.characters_in_scene || [];
                   if (sceneChars.length === 0) return false;
                   const cName = c.canonical_name.toLowerCase();
-                  const cParts = cName.split(/\s+/).filter(p => p.length > 2);
+                  const cParts = cName.split(/\s+/).filter(p => p.length > 3);
                   return sceneChars.some((sc) => {
                     const scLower = sc.toLowerCase();
                     if (cName === scLower) return true;
-                    const scParts = scLower.split(/\s+/).filter(p => p.length > 2);
+                    const scParts = scLower.split(/\s+/).filter(p => p.length > 3);
                     return cParts.some(p => scLower.includes(p)) || scParts.some(p => cName.includes(p));
                   });
                 })

@@ -94,8 +94,8 @@ def _build_reference_content(
                 name_lower == n.lower()
                 or first_name == n.lower().split()[0]
                 or (last_name and last_name == n.lower().split()[-1])
-                or any(p in n.lower() for p in name_parts if len(p) > 2)
-                or any(p in name_lower for p in n.lower().split() if len(p) > 2)
+                or any(p in n.lower() for p in name_parts if len(p) > 3)
+                or any(p in name_lower for p in n.lower().split() if len(p) > 3)
                 for n in in_scene_names
             )
             if is_match:
