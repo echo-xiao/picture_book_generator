@@ -7,6 +7,14 @@ module.exports = {
   ],
   theme: {
     extend: {
+      fontSize: {
+        xs: ["0.75rem", { lineHeight: "1.26" }],
+        sm: ["0.875rem", { lineHeight: "1.26" }],
+        base: ["1rem", { lineHeight: "1.26" }],
+        lg: ["1.125rem", { lineHeight: "1.26" }],
+        xl: ["1.25rem", { lineHeight: "1.26" }],
+        "2xl": ["1.5rem", { lineHeight: "1.26" }],
+      },
       fontFamily: {
         display: ['"Comic Neue"', '"Comic Sans MS"', "cursive"],
         body: ['"Nunito"', '"Comic Neue"', "sans-serif"],
