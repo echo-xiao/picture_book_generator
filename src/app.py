@@ -45,6 +45,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# Request timeout middleware — prevent hung requests from blocking the server
+import asyncio
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+
+
+class TimeoutMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        try:
+            return await asyncio.wait_for(call_next(request), timeout=120)
+        except asyncio.TimeoutError:
+            return JSONResponse({"error": "Request timed out"}, status_code=504)
+
+
+app.add_middleware(TimeoutMiddleware)
+
 # Serve generated images / assets
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(GENERATED_DIR)), name="static")
@@ -934,9 +951,20 @@ async def check_segment_quality(book_id: str, seg_id: int) -> dict[str, Any]:
                 break
 
     page_text = target.get("simplified_text", target.get("text", ""))
-    result = check_page_quality(ill_path, character_sheets, page_text, scene_chars, page_num)
+    try:
+        result = check_page_quality(ill_path, character_sheets, page_text, scene_chars, page_num)
+    except Exception as e:
+        logger.error("Quality check failed for segment %d: %s", seg_id, e)
+        raise HTTPException(status_code=500, detail=f"Quality check failed: {str(e)}")
     result["page"] = page_num
     result["segment_id"] = seg_id
+
+    # Cache result to disk
+    quality_dir = GENERATED_DIR / book_id / "chapters" / f"ch{ch_idx:02d}" / "quality"
+    quality_dir.mkdir(parents=True, exist_ok=True)
+    quality_file = quality_dir / f"page_{page_num:03d}_quality.json"
+    quality_file.write_text(json.dumps(result, indent=2, default=str, ensure_ascii=False), encoding="utf-8")
+
     return result
 
 

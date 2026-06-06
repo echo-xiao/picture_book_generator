@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useParams, useSearchParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { ChevronRight, RefreshCw, Save, Image, Users, MapPin, Smile, BookOpen, Shield, Paintbrush, MessageCircle, Send } from "lucide-react";
 import {
   getChapters,
@@ -29,12 +29,17 @@ const SENTIMENTS = ["positive", "negative", "neutral", "tense", "emotional"];
 
 export default function EditorPage() {
   const params = useParams();
-  const searchParams = useSearchParams();
-  const router = useRouter();
   const bookId = params.bookId as string;
-  const initialChapter = searchParams.get("ch") ? +searchParams.get("ch")! : null;
-  const initialSegment = searchParams.get("seg") ? +searchParams.get("seg")! : null;
   const initApplied = useRef(false);
+
+  // Read initial chapter/segment from URL (avoid useSearchParams Suspense issue)
+  const initialChapter = useRef<number | null>(null);
+  const initialSegment = useRef<number | null>(null);
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get("ch")) initialChapter.current = +sp.get("ch")!;
+    if (sp.get("seg")) initialSegment.current = +sp.get("seg")!;
+  }, []);
 
   const [chapters, setChapters] = useState<Record<string, ChapterInfo>>({});
   const [meta, setMeta] = useState<{ title?: string }>({});
@@ -122,8 +127,8 @@ export default function EditorPage() {
           setSheets(charData.sheets || {});
 
           const sortedKeys = chapKeys.sort((a, b) => +a - +b);
-          const startCh = initialChapter !== null && chapKeys.includes(String(initialChapter))
-            ? initialChapter
+          const startCh = initialChapter.current !== null && chapKeys.includes(String(initialChapter.current))
+            ? initialChapter.current
             : +sortedKeys[0];
           setSelectedChapter(startCh);
           setLoading(false);
@@ -150,8 +155,8 @@ export default function EditorPage() {
         setSegments(data.segments || []);
         if (data.segments?.length > 0) {
           // On first load, restore segment from URL
-          if (!initApplied.current && initialSegment !== null) {
-            const match = data.segments.find((s: Segment) => s.id === initialSegment);
+          if (!initApplied.current && initialSegment.current !== null) {
+            const match = data.segments.find((s: Segment) => s.id === initialSegment.current);
             setSelectedSegment(match || data.segments[0]);
             initApplied.current = true;
           } else {
@@ -181,6 +186,20 @@ export default function EditorPage() {
   useEffect(() => {
     setChatMessages([]);
     setChatInput("");
+  }, [selectedSegId]);
+
+  // Auto-generate simplified text if empty
+  useEffect(() => {
+    if (selectedSegId < 0 || !selectedSegment || selectedSegment.simplified_text) return;
+    generateSimplifiedText(bookId, selectedSegId)
+      .then((res) => {
+        if (res.simplified_text) {
+          const updated = { ...selectedSegment, simplified_text: res.simplified_text };
+          setSelectedSegment(updated);
+          setSegments((prev) => prev.map((s) => (s.id === selectedSegId ? updated : s)));
+        }
+      })
+      .catch((e) => console.error("Auto simplify failed:", e));
   }, [selectedSegId]);
 
   useEffect(() => {
