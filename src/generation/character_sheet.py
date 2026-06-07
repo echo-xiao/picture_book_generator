@@ -252,18 +252,42 @@ def _add_labels_to_sheet(image_path: str, name: str, profile: dict) -> str:
 
 
 def crop_portrait_from_sheet(sheet_path: str, output_path: str) -> str:
-    """Crop the FRONT view (top-left area) from a character sheet as portrait."""
+    """Crop the FRONT view from a character sheet as a square portrait.
+
+    Strategy: crop the first character (top-left 1/3 of the sheet),
+    then find the non-white bounding box and center it in a square.
+    """
     try:
-        from PIL import Image
-        img = Image.open(sheet_path)
+        from PIL import Image, ImageChops
+        img = Image.open(sheet_path).convert("RGB")
         w, h = img.size
-        # FRONT view is top-left 1/3 width, top 35% height
-        crop = img.crop((0, 0, w // 3, int(h * 0.35)))
-        # Make it square
-        cw, ch = crop.size
+
+        # Step 1: Crop top-left region (FRONT view area)
+        region = img.crop((0, 0, int(w * 0.35), int(h * 0.38)))
+
+        # Step 2: Find non-white content bounding box
+        bg = Image.new("RGB", region.size, (255, 255, 255))
+        diff = ImageChops.difference(region, bg)
+        bbox = diff.getbbox()
+        if bbox:
+            # Add padding
+            pad = 15
+            x1 = max(0, bbox[0] - pad)
+            y1 = max(0, bbox[1] - pad)
+            x2 = min(region.width, bbox[2] + pad)
+            y2 = min(region.height, bbox[3] + pad)
+            content = region.crop((x1, y1, x2, y2))
+        else:
+            content = region
+
+        # Step 3: Make square, centered
+        cw, ch = content.size
         size = max(cw, ch)
-        square = Image.new("RGBA" if img.mode == "RGBA" else "RGB", (size, size), (255, 255, 255))
-        square.paste(crop, ((size - cw) // 2, (size - ch) // 2))
+        square = Image.new("RGB", (size, size), (255, 255, 255))
+        square.paste(content, ((size - cw) // 2, (size - ch) // 2))
+
+        # Step 4: Resize to consistent size
+        square = square.resize((512, 512), Image.LANCZOS)
         square.save(output_path, quality=95)
         return output_path
     except Exception as e:

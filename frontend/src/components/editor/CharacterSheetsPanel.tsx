@@ -9,16 +9,17 @@ interface CharacterSheetsPanelProps {
   portraits: Record<string, string>;
   bookId: string;
   onRegenerateSheet: (canonicalName: string) => void;
+  onNavigateToCharacter?: (charName: string) => void;
 }
 
 export default function CharacterSheetsPanel({
   selectedSegment,
   characters,
-  portraits,
   sheets,
+  onNavigateToCharacter,
 }: CharacterSheetsPanelProps) {
   const filteredCharacters = characters.filter((c) => {
-    if (!portraits[c.canonical_name] && !sheets[c.canonical_name]) return false;
+    if (!sheets[c.canonical_name]) return false;
     const sceneChars = selectedSegment?.characters_in_scene || [];
     if (sceneChars.length === 0) return false;
     const cName = c.canonical_name.toLowerCase();
@@ -37,19 +38,18 @@ export default function CharacterSheetsPanel({
         <h3 className="font-display font-bold text-gray-700 text-xs mb-3">Characters in Scene</h3>
         <div className="space-y-4">
           {filteredCharacters.map((char) => {
-            const portraitUrl = portraits[char.canonical_name];
             const sheetUrl = sheets[char.canonical_name];
-            const imgUrl = portraitUrl || sheetUrl;
-
             return (
-              <div key={char.canonical_name}>
-                {imgUrl && (
-                  <img
-                    src={`${API_BASE}${imgUrl}?t=${Date.now()}`}
-                    alt={char.canonical_name}
-                    className="w-full rounded-xl mb-2"
-                  />
-                )}
+              <div
+                key={char.canonical_name}
+                className="cursor-pointer hover:opacity-80 transition-opacity"
+                onClick={() => onNavigateToCharacter?.(char.canonical_name)}
+              >
+                <img
+                  src={`${API_BASE}${sheetUrl}?t=${Date.now()}`}
+                  alt={char.canonical_name}
+                  className="w-full rounded-xl mb-2"
+                />
                 <p className="text-xs font-bold text-gray-800">{char.canonical_name}</p>
                 <p className="text-[10px] text-gray-500">{char.gender} / {char.role}</p>
               </div>

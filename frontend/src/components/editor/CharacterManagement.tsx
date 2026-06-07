@@ -183,17 +183,6 @@ export default function CharacterManagement({
 
           {/* Right: Portrait + Edit Fields */}
           <div className="w-[320px] shrink-0 overflow-y-auto p-5 space-y-3">
-            {/* Portrait (cropped from sheet - FRONT view, square, full width) */}
-            {sheets[selected.canonical_name] && (
-              <div className="w-full aspect-square rounded-xl overflow-hidden shadow-md mb-1">
-                <img
-                  src={`${API_BASE}${sheets[selected.canonical_name]}?t=${Date.now()}`}
-                  alt={`${selected.canonical_name} portrait`}
-                  className="w-[300%] h-[300%] object-cover object-[15%_5%]"
-                />
-              </div>
-            )}
-
             <div className="flex gap-4">
               <div className="flex-1">
                 <label className="text-xs text-gray-500 font-semibold mb-1 block">Gender</label>
@@ -306,6 +295,7 @@ function CharListItem({
 }) {
   return (
     <button
+      data-char={char.canonical_name}
       onClick={onClick}
       className={`w-full text-left px-3 py-2.5 border-b border-gray-50 transition-colors ${
         selected ? "bg-coral/10 border-l-2 border-l-coral" : "hover:bg-peach/20"

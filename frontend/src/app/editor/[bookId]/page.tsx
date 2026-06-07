@@ -858,6 +858,14 @@ export default function EditorPage() {
                   portraits={portraits}
                   bookId={bookId}
                   onRegenerateSheet={handleRegenerateSheet}
+                  onNavigateToCharacter={(charName) => {
+                    setActiveTab("characters");
+                    // CharacterManagement will auto-select via its own state
+                    setTimeout(() => {
+                      const el = document.querySelector(`[data-char="${charName}"]`);
+                      el?.scrollIntoView({ behavior: "smooth" });
+                    }, 100);
+                  }}
                 />
               </div>
             </>
