@@ -58,7 +58,6 @@ export default function CharacterManagement({
     setRegenChar(charName);
     try {
       await regenerateCharacterSheet(bookId, charName);
-      // Poll for new sheet (takes ~30s)
       setTimeout(async () => {
         const data = await getCharacters(bookId);
         onCharactersUpdate(data.characters || [], data.sheets || {});
@@ -71,86 +70,96 @@ export default function CharacterManagement({
   };
 
   const mainChars = characters.filter(c => c.role === "main");
-  const supportChars = characters.filter(c => c.role !== "main");
+  const supportChars = characters.filter(c => c.role === "supporting");
+  const minorChars = characters.filter(c => c.role !== "main" && c.role !== "supporting");
 
   return (
     <div className="flex-1 overflow-y-auto p-6">
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-5xl mx-auto">
         <h2 className="font-display text-xl font-bold text-gray-800 mb-1 flex items-center gap-2">
           <Users size={20} /> Character Management
         </h2>
-        <p className="text-xs text-gray-500 mb-6">
-          Review and edit characters before generating illustrations. Changes here affect all segments.
+        <p className="text-sm text-gray-500 mb-6">
+          Review and edit characters before generating illustrations. Changes affect all segments.
         </p>
 
         {/* Main Characters */}
         {mainChars.length > 0 && (
-          <div className="mb-6">
-            <h3 className="text-sm font-bold text-gray-600 mb-3">Main Characters ({mainChars.length})</h3>
-            <div className="grid grid-cols-2 gap-4">
-              {mainChars.map(char => (
-                <CharCard
-                  key={char.canonical_name}
-                  char={char}
-                  sheetUrl={sheets[char.canonical_name]}
-                  expanded={expandedChar === char.canonical_name}
-                  editing={editingChar}
-                  saving={savingChar === char.canonical_name}
-                  regenning={regenChar === char.canonical_name}
-                  onToggle={() => {
-                    if (expandedChar === char.canonical_name) {
-                      setExpandedChar(null);
-                    } else {
-                      startEdit(char);
-                    }
-                  }}
-                  onFieldChange={(field, value) => setEditingChar(prev => ({ ...prev, [field]: value }))}
-                  onSave={() => handleSave(char.canonical_name)}
-                  onRegenSheet={() => handleRegenSheet(char.canonical_name)}
-                  bookId={bookId}
-                />
-              ))}
-            </div>
-          </div>
+          <Section title={`Main Characters (${mainChars.length})`}>
+            {mainChars.map(char => (
+              <CharRow
+                key={char.canonical_name}
+                char={char}
+                sheetUrl={sheets[char.canonical_name]}
+                expanded={expandedChar === char.canonical_name}
+                editing={editingChar}
+                saving={savingChar === char.canonical_name}
+                regenning={regenChar === char.canonical_name}
+                onToggle={() => expandedChar === char.canonical_name ? setExpandedChar(null) : startEdit(char)}
+                onFieldChange={(field, value) => setEditingChar(prev => ({ ...prev, [field]: value }))}
+                onSave={() => handleSave(char.canonical_name)}
+                onRegenSheet={() => handleRegenSheet(char.canonical_name)}
+              />
+            ))}
+          </Section>
         )}
 
         {/* Supporting Characters */}
         {supportChars.length > 0 && (
-          <div>
-            <h3 className="text-sm font-bold text-gray-600 mb-3">Supporting Characters ({supportChars.length})</h3>
-            <div className="grid grid-cols-3 gap-3">
-              {supportChars.map(char => (
-                <CharCard
-                  key={char.canonical_name}
-                  char={char}
-                  sheetUrl={sheets[char.canonical_name]}
-                  expanded={expandedChar === char.canonical_name}
-                  editing={editingChar}
-                  saving={savingChar === char.canonical_name}
-                  regenning={regenChar === char.canonical_name}
-                  onToggle={() => {
-                    if (expandedChar === char.canonical_name) {
-                      setExpandedChar(null);
-                    } else {
-                      startEdit(char);
-                    }
-                  }}
-                  onFieldChange={(field, value) => setEditingChar(prev => ({ ...prev, [field]: value }))}
-                  onSave={() => handleSave(char.canonical_name)}
-                  onRegenSheet={() => handleRegenSheet(char.canonical_name)}
-                  bookId={bookId}
-                  compact
-                />
-              ))}
-            </div>
-          </div>
+          <Section title={`Supporting Characters (${supportChars.length})`}>
+            {supportChars.map(char => (
+              <CharRow
+                key={char.canonical_name}
+                char={char}
+                sheetUrl={sheets[char.canonical_name]}
+                expanded={expandedChar === char.canonical_name}
+                editing={editingChar}
+                saving={savingChar === char.canonical_name}
+                regenning={regenChar === char.canonical_name}
+                onToggle={() => expandedChar === char.canonical_name ? setExpandedChar(null) : startEdit(char)}
+                onFieldChange={(field, value) => setEditingChar(prev => ({ ...prev, [field]: value }))}
+                onSave={() => handleSave(char.canonical_name)}
+                onRegenSheet={() => handleRegenSheet(char.canonical_name)}
+              />
+            ))}
+          </Section>
+        )}
+
+        {/* Minor Characters */}
+        {minorChars.length > 0 && (
+          <Section title={`Minor Characters (${minorChars.length})`}>
+            {minorChars.map(char => (
+              <CharRow
+                key={char.canonical_name}
+                char={char}
+                sheetUrl={sheets[char.canonical_name]}
+                expanded={expandedChar === char.canonical_name}
+                editing={editingChar}
+                saving={savingChar === char.canonical_name}
+                regenning={regenChar === char.canonical_name}
+                onToggle={() => expandedChar === char.canonical_name ? setExpandedChar(null) : startEdit(char)}
+                onFieldChange={(field, value) => setEditingChar(prev => ({ ...prev, [field]: value }))}
+                onSave={() => handleSave(char.canonical_name)}
+                onRegenSheet={() => handleRegenSheet(char.canonical_name)}
+              />
+            ))}
+          </Section>
         )}
       </div>
     </div>
   );
 }
 
-function CharCard({
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="mb-8">
+      <h3 className="text-sm font-bold text-gray-600 mb-3 border-b border-peach/30 pb-2">{title}</h3>
+      <div className="space-y-3">{children}</div>
+    </div>
+  );
+}
+
+function CharRow({
   char,
   sheetUrl,
   expanded,
@@ -161,8 +170,6 @@ function CharCard({
   onFieldChange,
   onSave,
   onRegenSheet,
-  bookId,
-  compact = false,
 }: {
   char: CharacterInfo;
   sheetUrl?: string;
@@ -174,118 +181,122 @@ function CharCard({
   onFieldChange: (field: string, value: any) => void;
   onSave: () => void;
   onRegenSheet: () => void;
-  bookId: string;
-  compact?: boolean;
 }) {
   return (
-    <div className="card !p-3">
-      {/* Header */}
-      <button onClick={onToggle} className="w-full flex items-center gap-3 text-left">
+    <div className="card !p-4">
+      {/* Collapsed: left text + right image */}
+      <button onClick={onToggle} className="w-full flex items-center gap-4 text-left">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-sm font-bold text-gray-800">{char.canonical_name}</span>
+            <span className="text-[10px] px-1.5 py-0.5 bg-sage/30 rounded text-gray-600">
+              {char.gender || "?"} / {char.role || "?"}
+            </span>
+          </div>
+          {char.description && (
+            <p className="text-xs text-gray-500 mb-1">{char.description}</p>
+          )}
+          {char.appearance && (
+            <p className="text-xs text-gray-400 italic">{char.appearance.slice(0, 120)}{char.appearance.length > 120 ? "..." : ""}</p>
+          )}
+        </div>
         {sheetUrl ? (
           <img
             src={`${API_BASE}${sheetUrl}`}
             alt={char.canonical_name}
-            className={`${compact ? "w-12 h-12" : "w-16 h-16"} rounded-lg object-cover shrink-0`}
+            className="w-20 h-20 rounded-lg object-cover shrink-0"
           />
         ) : (
-          <div className={`${compact ? "w-12 h-12" : "w-16 h-16"} bg-peach/20 rounded-lg flex items-center justify-center shrink-0`}>
-            <Users size={compact ? 16 : 20} className="text-gray-400" />
+          <div className="w-20 h-20 bg-peach/20 rounded-lg flex items-center justify-center shrink-0">
+            <Users size={20} className="text-gray-300" />
           </div>
         )}
-        <div className="flex-1 min-w-0">
-          <p className={`${compact ? "text-xs" : "text-sm"} font-bold text-gray-800 truncate`}>
-            {char.canonical_name}
-          </p>
-          <p className="text-[10px] text-gray-500">
-            {char.gender || "?"} / {char.role || "supporting"}
-          </p>
-          {!compact && char.description && (
-            <p className="text-[10px] text-gray-400 truncate mt-0.5">{char.description}</p>
-          )}
-        </div>
-        {expanded ? <ChevronUp size={14} className="text-gray-400 shrink-0" /> : <ChevronDown size={14} className="text-gray-400 shrink-0" />}
+        {expanded ? <ChevronUp size={16} className="text-gray-400 shrink-0" /> : <ChevronDown size={16} className="text-gray-400 shrink-0" />}
       </button>
 
-      {/* Expanded Edit Form */}
+      {/* Expanded: edit form */}
       {expanded && (
-        <div className="mt-3 space-y-2 border-t border-peach/20 pt-3">
-          {/* Character Sheet */}
-          {sheetUrl && (
-            <div className="mb-2">
-              <img
-                src={`${API_BASE}${sheetUrl}`}
-                alt={char.canonical_name}
-                className="w-full rounded-lg"
-              />
+        <div className="mt-4 border-t border-peach/20 pt-4">
+          <div className="flex gap-6">
+            {/* Left: form fields */}
+            <div className="flex-1 space-y-3">
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="text-xs text-gray-500 font-semibold mb-1 block">Gender</label>
+                  <select
+                    value={editing.gender || "unknown"}
+                    onChange={e => onFieldChange("gender", e.target.value)}
+                    className="w-full rounded-lg border border-peach/50 px-3 py-2 text-sm bg-white"
+                  >
+                    <option value="male">Male</option>
+                    <option value="female">Female</option>
+                    <option value="unknown">Unknown</option>
+                  </select>
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs text-gray-500 font-semibold mb-1 block">Role</label>
+                  <select
+                    value={editing.role || "supporting"}
+                    onChange={e => onFieldChange("role", e.target.value)}
+                    className="w-full rounded-lg border border-peach/50 px-3 py-2 text-sm bg-white"
+                  >
+                    <option value="main">Main</option>
+                    <option value="supporting">Supporting</option>
+                    <option value="minor">Minor</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs text-gray-500 font-semibold mb-1 block">Appearance</label>
+                <textarea
+                  value={editing.appearance || ""}
+                  onChange={e => onFieldChange("appearance", e.target.value)}
+                  rows={3}
+                  className="w-full rounded-lg border border-peach/50 px-3 py-2 text-sm resize-none"
+                  placeholder="Physical description: hair, face, clothing, accessories..."
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-gray-500 font-semibold mb-1 block">Description</label>
+                <textarea
+                  value={editing.description || ""}
+                  onChange={e => onFieldChange("description", e.target.value)}
+                  rows={2}
+                  className="w-full rounded-lg border border-peach/50 px-3 py-2 text-sm resize-none"
+                  placeholder="Character background and personality..."
+                />
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <button onClick={onSave} disabled={saving} className="btn-primary text-xs !px-3 !py-1.5 flex items-center gap-1">
+                  <Save size={12} />
+                  {saving ? "Saving..." : "Save Changes"}
+                </button>
+                <button onClick={onRegenSheet} disabled={regenning} className="btn-secondary text-xs !px-3 !py-1.5 flex items-center gap-1">
+                  <RefreshCw size={12} className={regenning ? "animate-spin" : ""} />
+                  {regenning ? "Generating..." : "Regenerate Sheet"}
+                </button>
+              </div>
             </div>
-          )}
 
-          <div className="flex gap-2">
-            <div className="flex-1">
-              <label className="text-[10px] text-gray-500 font-semibold">Gender</label>
-              <select
-                value={editing.gender || "unknown"}
-                onChange={e => onFieldChange("gender", e.target.value)}
-                className="w-full rounded-md border border-peach/50 px-2 py-1 text-xs bg-white"
-              >
-                <option value="male">Male</option>
-                <option value="female">Female</option>
-                <option value="unknown">Unknown</option>
-              </select>
+            {/* Right: character sheet image */}
+            <div className="w-48 shrink-0">
+              <label className="text-xs text-gray-500 font-semibold mb-1 block">Character Sheet</label>
+              {sheetUrl ? (
+                <img
+                  src={`${API_BASE}${sheetUrl}`}
+                  alt={char.canonical_name}
+                  className="w-full rounded-lg shadow-md"
+                />
+              ) : (
+                <div className="w-full aspect-square bg-peach/20 rounded-lg flex flex-col items-center justify-center text-gray-400 gap-2">
+                  <Users size={24} />
+                  <p className="text-[10px]">No sheet yet</p>
+                </div>
+              )}
             </div>
-            <div className="flex-1">
-              <label className="text-[10px] text-gray-500 font-semibold">Role</label>
-              <select
-                value={editing.role || "supporting"}
-                onChange={e => onFieldChange("role", e.target.value)}
-                className="w-full rounded-md border border-peach/50 px-2 py-1 text-xs bg-white"
-              >
-                <option value="main">Main</option>
-                <option value="supporting">Supporting</option>
-                <option value="minor">Minor</option>
-              </select>
-            </div>
-          </div>
-
-          <div>
-            <label className="text-[10px] text-gray-500 font-semibold">Appearance</label>
-            <textarea
-              value={editing.appearance || ""}
-              onChange={e => onFieldChange("appearance", e.target.value)}
-              rows={3}
-              className="w-full rounded-md border border-peach/50 px-2 py-1.5 text-xs resize-none"
-              placeholder="Physical description..."
-            />
-          </div>
-
-          <div>
-            <label className="text-[10px] text-gray-500 font-semibold">Description</label>
-            <textarea
-              value={editing.description || ""}
-              onChange={e => onFieldChange("description", e.target.value)}
-              rows={2}
-              className="w-full rounded-md border border-peach/50 px-2 py-1.5 text-xs resize-none"
-              placeholder="Character background..."
-            />
-          </div>
-
-          <div className="flex gap-2 pt-1">
-            <button
-              onClick={onSave}
-              disabled={saving}
-              className="btn-primary text-[10px] !px-2.5 !py-1 flex items-center gap-1"
-            >
-              <Save size={10} />
-              {saving ? "Saving..." : "Save"}
-            </button>
-            <button
-              onClick={onRegenSheet}
-              disabled={regenning}
-              className="btn-secondary text-[10px] !px-2.5 !py-1 flex items-center gap-1"
-            >
-              <RefreshCw size={10} className={regenning ? "animate-spin" : ""} />
-              {regenning ? "Generating..." : "Regen Sheet"}
-            </button>
           </div>
         </div>
       )}
