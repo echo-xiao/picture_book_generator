@@ -113,8 +113,8 @@ export default function CharacterManagement({
       {/* Middle + Right */}
       {selected ? (
         <div className="flex-1 flex overflow-hidden">
-          {/* Middle: Character Sheet Image */}
-          <div className="w-80 shrink-0 overflow-y-auto p-6 border-r border-peach/20">
+          {/* Middle: Character Sheet Image (main area) */}
+          <div className="flex-1 overflow-y-auto p-6 border-r border-peach/20">
             <h2 className="font-display text-lg font-bold text-gray-800 mb-3">{selected.canonical_name}</h2>
             {sheets[selected.canonical_name] ? (
               <img
@@ -141,7 +141,7 @@ export default function CharacterManagement({
           </div>
 
           {/* Right: Edit Fields */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          <div className="w-[320px] shrink-0 overflow-y-auto p-5 space-y-4">
 
             <div className="flex gap-4">
               <div className="flex-1">
