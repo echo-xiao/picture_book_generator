@@ -145,8 +145,37 @@ async def regenerate_segment_illustration(
         except Exception:
             pass
 
+        # Write completion marker
+        import time as _t
+        marker = ch_base / f"regen_{seg_id}.json"
+        marker.write_text(json.dumps({"status": "complete", "segment_id": seg_id, "page_number": page_num, "timestamp": _t.time()}))
+
     background_tasks.add_task(_regen)
+
+    # Clear old marker
+    marker = ch_base / f"regen_{seg_id}.json"
+    if marker.exists():
+        marker.unlink()
+
     return {"status": "regenerating", "segment_id": seg_id, "page_number": page_num}
+
+
+@router.get("/api/book/{book_id}/segment/{seg_id}/regen-status")
+async def get_regen_status(book_id: str, seg_id: int) -> dict[str, Any]:
+    """Check if a segment regeneration is complete."""
+    analysis = _load_json(book_id, "analysis.json")
+    if not analysis:
+        return {"status": "unknown"}
+    target = next((s for s in analysis.get("segments", []) if s.get("id") == seg_id), None)
+    if not target:
+        return {"status": "unknown"}
+    ch_idx = target.get("chapter_idx", 0)
+    marker = GENERATED_DIR / book_id / "chapters" / f"ch{ch_idx:02d}" / f"regen_{seg_id}.json"
+    if marker.exists():
+        result = json.loads(marker.read_text())
+        marker.unlink()  # One-time read
+        return result
+    return {"status": "generating"}
 
 
 @router.post("/api/book/{book_id}/chapter/{ch_idx}/generate")

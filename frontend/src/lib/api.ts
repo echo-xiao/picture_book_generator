@@ -106,6 +106,11 @@ export async function regenerateSegment(bookId: string, segId: number) {
   return data;
 }
 
+export async function getRegenStatus(bookId: string, segId: number) {
+  const { data } = await api.get(`/book/${bookId}/segment/${segId}/regen-status`);
+  return data as { status: string; segment_id?: number; page_number?: number; timestamp?: number };
+}
+
 export async function regenerateCharacterSheet(bookId: string, charName: string) {
   const { data } = await api.post(`/book/${bookId}/characters/${encodeURIComponent(charName)}/regenerate`);
   return data;

@@ -18,6 +18,7 @@ import {
   getSegmentHistory,
   checkSegmentQuality,
   chatWithAI,
+  getRegenStatus,
 } from "@/lib/api";
 import type { Segment, ChapterInfo, CharacterInfo } from "@/types";
 
@@ -256,63 +257,54 @@ export default function EditorPage() {
       });
       // Trigger regeneration
       await regenerateSegment(bookId, selectedSegment.id);
-      // Poll every 5s until image appears
+      // Poll regen-status every 5s until complete
       const pollInterval = setInterval(async () => {
-        if (selectedChapter !== null) {
-          try {
-            const data = await getChapterSegments(bookId, selectedChapter);
-            const updated = data.segments?.find((s: Segment) => s.id === selectedSegment.id);
-            if (updated?.illustration_url) {
-              setSegments(data.segments || []);
-              setSelectedSegment(updated);
-              setRegenerating(false);
-              clearInterval(pollInterval);
-              // Auto quality check -> auto fix if low score
-              setCheckingQuality(true);
-              checkSegmentQuality(bookId, selectedSegment.id)
-                .then(async (result) => {
-                  setQualityResult(result);
-                  // Auto-fix: if score < 70 and has feedback, send to AI chat to fix prompts
-                  if (result.overall_score < 70 && result.regeneration_feedback) {
-                    const fixMsg = `Quality check found issues (score: ${result.overall_score}%). Please fix the prompts based on this feedback:\n${result.regeneration_feedback}`;
-                    setChatOpen(true);
-                    const msgs = [{ role: "user" as string, content: fixMsg }];
-                    setChatMessages(msgs);
-                    setChatLoading(true);
-                    try {
-                      const res = await chatWithAI(bookId, selectedSegment.id, fixMsg, []);
-                      setChatMessages([...msgs, { role: "assistant", content: res.reply }]);
-                      if (res.updates && Object.keys(res.updates).length > 0) {
-                        let fix = { ...updated! };
-                        if (res.updates.simplified_text !== undefined) fix.simplified_text = res.updates.simplified_text as string;
-                        if (res.updates.scene_background !== undefined) fix.scene_background = res.updates.scene_background as string;
-                        if (res.updates.scene_summary !== undefined) fix.scene_summary = res.updates.scene_summary as string;
-                        if (res.updates.sentiment !== undefined) fix.sentiment = res.updates.sentiment as string;
-                        if (res.updates.character_actions !== undefined) {
-                          fix.character_actions = res.updates.character_actions as any;
-                          fix.characters_in_scene = (res.updates.character_actions as any[]).map((a: any) => a.name).filter(Boolean);
-                        }
-                        setSelectedSegment(fix);
-                        setSegments((prev) => prev.map((s) => (s.id === selectedSegment.id ? fix : s)));
-                      }
-                    } catch (e) {
-                      console.error("Auto-fix failed:", e);
-                    } finally {
-                      setChatLoading(false);
-                    }
-                  }
-                })
-                .catch((e) => console.error("Auto quality check failed:", e))
-                .finally(() => setCheckingQuality(false));
+        try {
+          const status = await getRegenStatus(bookId, selectedSegment.id);
+          if (status.status === "complete") {
+            clearInterval(pollInterval);
+            // Reload segments to get new illustration URL
+            if (selectedChapter !== null) {
+              const data = await getChapterSegments(bookId, selectedChapter);
+              const updated = data.segments?.find((s: Segment) => s.id === selectedSegment.id);
+              if (updated) {
+                setSegments(data.segments || []);
+                setSelectedSegment(updated);
+              }
             }
-          } catch {}
-        }
+            setRegenerating(false);
+
+            // Auto quality check
+            setCheckingQuality(true);
+            try {
+              const result = await checkSegmentQuality(bookId, selectedSegment.id);
+              setQualityResult(result);
+              // Auto-fix if score < 70%
+              if (result.overall_score < 70 && result.regeneration_feedback) {
+                const fixMsg = `Quality check found issues (score: ${result.overall_score}%). Please fix the prompts based on this feedback:\n${result.regeneration_feedback}`;
+                setChatOpen(true);
+                setChatMessages([{ role: "user", content: fixMsg }]);
+                setChatLoading(true);
+                try {
+                  const res = await chatWithAI(bookId, selectedSegment.id, fixMsg, []);
+                  setChatMessages(prev => [...prev, { role: "assistant", content: res.reply }]);
+                  if (res.updates && Object.keys(res.updates).length > 0) {
+                    const seg = selectedSegment;
+                    const fix = { ...seg, ...res.updates } as any;
+                    if (res.updates.character_actions) {
+                      fix.characters_in_scene = (res.updates.character_actions as any[]).map((a: any) => a.name).filter(Boolean);
+                    }
+                    setSelectedSegment(fix);
+                    setSegments(prev => prev.map(s => s.id === seg.id ? fix : s));
+                  }
+                } catch {} finally { setChatLoading(false); }
+              }
+            } catch {} finally { setCheckingQuality(false); }
+          }
+        } catch {}
       }, 5000);
-      // Timeout after 2 minutes
-      setTimeout(() => {
-        clearInterval(pollInterval);
-        setRegenerating(false);
-      }, 120000);
+      // Timeout after 3 minutes
+      setTimeout(() => { clearInterval(pollInterval); setRegenerating(false); }, 180000);
     } catch (e: any) {
       console.error("Regenerate failed:", e);
       alert(`Regenerate failed: ${e?.message || e}`);
