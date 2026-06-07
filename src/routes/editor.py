@@ -121,8 +121,15 @@ async def update_segment(book_id: str, seg_id: int, update: SegmentUpdate) -> di
     for key, value in update_dict.items():
         target[key] = value
 
-    # Save back
+    # Save back to JSON
     _save_json(book_id, "analysis.json", analysis)
+
+    # Sync to MongoDB
+    try:
+        from src.core.db import update_segment as db_update_segment
+        db_update_segment(book_id, seg_id, update_dict)
+    except Exception:
+        pass  # MongoDB is best-effort
 
     return {"status": "updated", "segment_id": seg_id, "updated_fields": list(update_dict.keys())}
 

@@ -499,7 +499,7 @@ def _get_book_id(args: dict) -> str:
 # --- Layer 1: Extraction ---
 def _tool_extract_text(args: dict) -> dict:
     from src.extraction import extract_text
-    from src.state_store import save
+    from src.core.state_store import save
 
     source = args["source"]
     result = extract_text(source)
@@ -534,7 +534,7 @@ def _tool_extract_text(args: dict) -> dict:
             shutil.rmtree(new_dir)
         if old_dir.exists():
             old_dir.rename(new_dir)
-        from src.state_store import _stores
+        from src.core.state_store import _stores
         if book_id in _stores:
             _stores[new_book_id] = _stores.pop(book_id)
 
@@ -559,7 +559,7 @@ def _tool_analyze_book(args: dict) -> dict:
     from src.analysis.visual_score import score_visual_concreteness
     from src.analysis.complexity import assess_complexity
     from src.analysis.key_events import extract_key_events
-    from src.state_store import save, load
+    from src.core.state_store import save, load
 
     book_id = args.get("book_id", "default")
 
@@ -620,7 +620,7 @@ def _tool_analyze_book(args: dict) -> dict:
 
 # --- Layer 3: Scene Selection ---
 def _tool_select_scenes(args: dict) -> dict:
-    from src.state_store import save, load
+    from src.core.state_store import save, load
 
     book_id = args.get("book_id", "default")
 
@@ -692,7 +692,7 @@ def _tool_select_scenes(args: dict) -> dict:
 # --- Layer 3: Text Simplification ---
 def _tool_simplify_text(args: dict) -> dict:
     from src.agent.text_simplifier import simplify_text
-    from src.state_store import save, load
+    from src.core.state_store import save, load
 
     book_id = args.get("book_id", "default")
 
@@ -735,7 +735,7 @@ def _tool_simplify_text(args: dict) -> dict:
 # --- Layer 3: Illustration Prompts ---
 def _tool_generate_illustration_prompts(args: dict) -> dict:
     from src.agent.illustration_prompter import generate_illustration_prompts
-    from src.state_store import save, load
+    from src.core.state_store import save, load
 
     book_id = args.get("book_id", "default")
 
@@ -781,7 +781,7 @@ def _tool_generate_illustration_prompts(args: dict) -> dict:
 # --- Character Sheet Generation ---
 def _tool_generate_character_sheets(args: dict) -> dict:
     from src.generation.character_sheet import generate_character_sheets
-    from src.state_store import save, load
+    from src.core.state_store import save, load
 
     book_id = args.get("book_id", "default")
 
@@ -816,7 +816,7 @@ def _tool_generate_character_sheets(args: dict) -> dict:
 def _tool_generate_images(args: dict) -> dict:
     from src.generation.illustration import generate_illustrations
     from src.generation.gemini_consistency_check import check_page_quality
-    from src.state_store import save, load
+    from src.core.state_store import save, load
 
     book_id = args.get("book_id", "default")
 
@@ -881,7 +881,7 @@ def _tool_generate_images(args: dict) -> dict:
 # --- Layer 5: QA ---
 def _tool_check_quality(args: dict) -> dict:
     from src.qa import run_qa_pipeline
-    from src.state_store import load
+    from src.core.state_store import load
 
     book_id = args.get("book_id", "default")
 
@@ -911,8 +911,8 @@ def _tool_check_quality(args: dict) -> dict:
 
 # --- Layer 6: Render ---
 def _tool_render_book(args: dict) -> dict:
-    from src.renderer import generate_book_html, export_pdf
-    from src.state_store import load
+    from src.renderer import export_pdf
+    from src.core.state_store import load
 
     book_id = args.get("book_id", "default")
     book_title = args.get("book_title", "") or load(book_id, "title", "Untitled")

@@ -134,6 +134,17 @@ async def regenerate_segment_illustration(
         )
         logger.info("Regeneration complete for segment %d (page %d)", seg_id, page_num)
 
+        # Sync to MongoDB
+        try:
+            from src.core.db import save_illustration
+            for ext in (".png", ".jpg"):
+                img = ch_dir / f"page_{page_num:03d}{ext}"
+                if img.exists():
+                    save_illustration(book_id, seg_id, str(page_prompt), str(img))
+                    break
+        except Exception:
+            pass
+
     background_tasks.add_task(_regen)
     return {"status": "regenerating", "segment_id": seg_id, "page_number": page_num}
 

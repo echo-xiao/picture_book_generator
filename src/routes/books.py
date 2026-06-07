@@ -13,8 +13,8 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from src.config import GENERATED_DIR
-from src.models import GenerationConfig
-from src.pipeline import (
+from src.core.models import GenerationConfig
+from src.core.pipeline import (
     delete_book,
     generate_picture_book,
     get_book,
@@ -136,7 +136,7 @@ async def get_book_data(book_id: str) -> dict[str, Any]:
 @router.get("/api/book/{book_id}/steps")
 async def get_book_steps(book_id: str) -> list[dict[str, Any]]:
     """Get all intermediate pipeline steps for a book."""
-    from src.step_logger import get_steps
+    from src.core.step_logger import get_steps
     steps = get_steps(book_id)
     if not steps:
         raise HTTPException(status_code=404, detail="No steps found. Book may not exist or is still generating.")

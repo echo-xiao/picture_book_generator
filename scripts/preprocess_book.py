@@ -224,7 +224,7 @@ def _layer1_extract_text(input_path, book_id, preprocess_dir):
     print("\n[Layer 1/6] Extracting text...")
     t0 = time.time()
     from src.extraction import extract_text
-    from src.mcp_server import _strip_book_metadata
+    from src.agent.mcp_server import _strip_book_metadata
 
     source = input_path.read_text(encoding="utf-8", errors="replace")
     print(f"Loaded {len(source)} chars from {input_path.name}")
@@ -526,7 +526,7 @@ def main():
         book_id, preprocess_dir, chapters, characters, title, ch_seg_groups, args.skip_sheets)
 
     # Save to MongoDB
-    from src.db import save_preprocess, is_available as mongo_available
+    from src.core.db import save_preprocess, is_available as mongo_available
     if mongo_available():
         save_preprocess(book_id, title, characters, final_segments, alias_map, gender_map)
         print(f"\n  MongoDB: saved ({len(characters)} characters, {len(final_segments)} segments)")

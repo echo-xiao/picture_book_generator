@@ -15,8 +15,8 @@ from typing import Any, Callable, Coroutine, Optional
 from google import genai
 
 from src.config import GEMINI_API_KEY, GEMINI_MODEL
-from src.mcp_server import TOOL_DEFINITIONS, execute_tool
-from src.models import GenerationConfig, GenerationStatus, PageData, PictureBook, StatusEnum
+from src.agent.mcp_server import TOOL_DEFINITIONS, execute_tool
+from src.core.models import GenerationConfig, GenerationStatus, PageData, PictureBook, StatusEnum
 
 logger = logging.getLogger(__name__)
 
@@ -290,7 +290,7 @@ async def run_agent(
             duration_ms = int((time.time() - t0) * 1000)
 
             # Persist step to files + MongoDB
-            from src.step_logger import log_step
+            from src.core.step_logger import log_step
             log_step(
                 book_id=book_id,
                 tool_name=tool_name,
@@ -325,7 +325,7 @@ async def run_agent(
         contents.append({"role": "user", "parts": function_responses})
 
     # Build final PictureBook from state store
-    from src.state_store import load as _load
+    from src.core.state_store import load as _load
     simplified = _load(book_id, "simplified_scenes", [])
     image_result = _load(book_id, "image_result", {})
     illustrations = image_result.get("illustrations", [])

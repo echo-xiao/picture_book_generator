@@ -14,7 +14,7 @@ from typing import Any, Callable, Coroutine, Optional
 import motor.motor_asyncio
 
 from src.config import GENERATED_DIR, MONGODB_DB, MONGODB_URI
-from src.models import (
+from src.core.models import (
     GenerationConfig,
     GenerationStatus,
     PictureBook,
@@ -120,7 +120,7 @@ async def generate_picture_book(
             await status_callback(s)
 
     try:
-        from src.agent_orchestrator import run_agent
+        from src.agent.orchestrator import run_agent
 
         book = await run_agent(
             source=source,
