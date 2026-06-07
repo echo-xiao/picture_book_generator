@@ -49,7 +49,7 @@ export default function EditorPage() {
     return sp.get("seg") ? +sp.get("seg")! : null;
   });
 
-  const [activeTab, setActiveTab] = useState<"editor" | "characters" | "scenes">("editor");
+  const [activeTab, setActiveTab] = useState<"pages" | "characters" | "scenes">("pages");
   const [navigateToChar, setNavigateToChar] = useState<string | null>(null);
   const [chapters, setChapters] = useState<Record<string, ChapterInfo>>({});
   const [meta, setMeta] = useState<{ title?: string }>({});
@@ -543,12 +543,12 @@ export default function EditorPage() {
               <MapPin size={12} /> Scenes
             </button>
             <button
-              onClick={() => setActiveTab("editor")}
+              onClick={() => setActiveTab("pages")}
               className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors flex items-center gap-1 ${
-                activeTab === "editor" ? "bg-white shadow-sm text-coral" : "text-gray-500 hover:text-gray-700"
+                activeTab === "pages" ? "bg-white shadow-sm text-coral" : "text-gray-500 hover:text-gray-700"
               }`}
             >
-              <BookOpen size={12} /> Editor
+              <BookOpen size={12} /> Pages
             </button>
           </div>
           <a
@@ -581,8 +581,8 @@ export default function EditorPage() {
         <SceneManagement bookId={bookId} />
       )}
 
-      {/* Editor Tab */}
-      {activeTab === "editor" && (
+      {/* Pages Tab */}
+      {activeTab === "pages" && (
       <div className="flex flex-1 overflow-hidden">
         {/* Left Panel: Chapters + Segments */}
         <div className="w-64 bg-white border-r border-peach/30 overflow-y-auto shrink-0">
