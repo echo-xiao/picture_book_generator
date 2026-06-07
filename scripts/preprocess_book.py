@@ -150,33 +150,55 @@ def _segment_text(full_text: str, chapters: list[dict], max_words: int = 400) ->
 # ═══════════════════════════════════════════════════════════════
 
 def _llm_annotate_chapter(title: str, ch_title: str, segments: list[dict], characters: list[dict]) -> list[dict]:
-    """LLM annotates segments: characters_in_scene (with pronoun resolution), sentiment, key events."""
+    """LLM annotates segments with full detail: characters, actions, background, summary, simplified text."""
     from src.llm_client import generate_json
 
-    char_names = [c["canonical_name"] for c in characters]
+    char_list = "\n".join(f"- {c['canonical_name']} ({c.get('role','?')}, {c.get('gender','?')}): {c.get('description','')[:100]}" for c in characters)
 
-    # Send FULL text, no truncation
     seg_texts = [f"[Scene {i+1}]\n{seg['text']}" for i, seg in enumerate(segments)]
 
-    char_action_example = '[{"name": "Mr. Lorry", "action": "knocking on the door nervously"}]'
-    bg_example = "A dark, narrow staircase in a crumbling Parisian tenement. Cobwebs hang from the ceiling."
+    prompt = f"""You are annotating scenes from the novel "{title}", {ch_title}, for a children's picture book.
 
-    prompt = f"""Annotate these scenes from "{title}", {ch_title}.
+KNOWN CHARACTERS:
+{char_list}
 
-Known characters: {', '.join(char_names)}
-
+SCENES:
 {chr(10).join(seg_texts)}
 
-For each scene:
-- scene_number (1-based)
-- characters_in_scene: Characters PHYSICALLY PRESENT and DOING something. Not just mentioned/remembered. Resolve pronouns. Format: {char_action_example}
-- scene_background: Physical setting/environment (location, time, weather, objects, atmosphere). Example: "{bg_example}"
-- scene_summary: 1 sentence summary
-- sentiment: "positive", "negative", "neutral", "tense", or "emotional"
-- is_key_event: true/false
-- event_description: if key event, what happens (else null)
+For EACH scene, provide ALL of the following fields:
 
-Return JSON with "annotations" array."""
+1. scene_number (1-based integer)
+
+2. characters_in_scene: Array of characters PHYSICALLY PRESENT in this scene.
+   - RESOLVE ALL PRONOUNS: "he" → use full name, "she" → use full name, "his wife" → use her actual name, "the old man" → use his actual name.
+   - ONLY include characters who are physically there and doing something.
+   - Format: [{{"name": "Madame Defarge", "action": "knitting silently at the counter"}}]
+   - NEVER use pronouns or descriptions like "his wife", "the tall man". Always use the canonical name from the character list.
+
+3. scene_background: Detailed physical description of the setting.
+   - MUST be specific and visual: location, time of day, lighting, objects, colors, atmosphere.
+   - NEVER write "same as scene X" or "as before". Every scene must have its own unique, complete description.
+   - Example: "Inside the Defarge wine shop. A long wooden counter with wine barrels behind it. Dim candlelight. Stone walls stained with age. A narrow door leads to a dark staircase."
+
+4. scene_summary: One sentence summary using character FULL NAMES (no pronouns).
+
+5. sentiment: One of "positive", "negative", "neutral", "tense", "emotional"
+
+6. simplified_text: Rewrite this scene as a children's picture book page (age 4-6).
+   - Short sentences (max 10 words each), 3-6 sentences total.
+   - Use character full names, not pronouns.
+   - Keep key dialogue as direct speech.
+   - Simple vocabulary, vivid and concrete.
+
+7. is_key_event: true/false
+8. event_description: If key event, one sentence describing what happens (else null)
+
+CRITICAL RULES:
+- NEVER use pronouns (he/she/they/his/her) in ANY field. Always use the character's full canonical name.
+- NEVER reference other scenes ("same as scene 6", "continues from before"). Each annotation must be self-contained.
+- EVERY character physically present MUST be listed with a specific action.
+
+Return JSON: {{"annotations": [...]}}"""
 
     result = generate_json(prompt)
 
@@ -200,6 +222,7 @@ Return JSON with "annotations" array."""
         seg["scene_summary"] = ann.get("scene_summary", "")
         seg["scene_background"] = ann.get("scene_background", "")
         seg["sentiment"] = ann.get("sentiment", "neutral")
+        seg["simplified_text"] = ann.get("simplified_text", "")
         seg["is_key_event"] = ann.get("is_key_event", False)
         seg["event_description"] = ann.get("event_description")
 
