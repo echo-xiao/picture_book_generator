@@ -56,11 +56,22 @@ For each character provide:
 - role: "main", "supporting", or "minor"
 - description: One sentence about who they are
 - appearance: Physical appearance from the text (hair, clothing, build, age, distinctive features). Be as detailed as possible.
+- visual_details: Structured appearance breakdown:
+  - age: approximate age or age description (e.g. "60", "elderly", "young woman")
+  - ethnicity: ethnic background if mentioned (e.g. "French", "English")
+  - skin_tone: skin description (e.g. "pale", "rosy cheeks", "dark")
+  - hair: hair color, style, length (e.g. "crisp flaxen wig", "long dark curly hair")
+  - eyes: eye color and description (e.g. "bright moist eyes", "dark sharp eyes")
+  - build: body type (e.g. "stout", "tall and thin", "short slight figure")
+  - clothing: typical outfit (e.g. "brown suit with large square cuffs")
+  - accessories: notable items (e.g. "round spectacles", "knitting needles", "cane")
+  - distinctive: most recognizable feature (e.g. "healthy colour in cheeks", "wild white hair")
 
 Rules:
 - "Monsieur Defarge" and "Madame Defarge" are DIFFERENT characters
 - "Jacques One", "Jacques Two", "Jacques Three" are SEPARATE people
 - Do NOT include places, objects, or abstract concepts
+- For visual_details, extract ONLY what the text actually describes. Leave fields empty if not mentioned.
 
 Return JSON: {{"characters": [{{...}}]}}""")
 
