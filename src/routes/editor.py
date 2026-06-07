@@ -58,6 +58,59 @@ async def get_characters(book_id: str) -> dict[str, Any]:
     }
 
 
+class CharacterUpdate(BaseModel):
+    canonical_name: Optional[str] = None
+    gender: Optional[str] = None
+    role: Optional[str] = None
+    appearance: Optional[str] = None
+    description: Optional[str] = None
+    aliases: Optional[list[str]] = None
+
+
+@router.put("/api/book/{book_id}/preprocess/characters/{char_name}")
+async def update_character(book_id: str, char_name: str, update: CharacterUpdate) -> dict[str, Any]:
+    """Update a character's profile."""
+    llm_chars = _load_json(book_id, "llm_characters.json")
+    if not llm_chars:
+        raise HTTPException(status_code=404, detail="No character data.")
+
+    target = next((c for c in llm_chars.get("characters", []) if c.get("canonical_name") == char_name), None)
+    if not target:
+        raise HTTPException(status_code=404, detail=f"Character '{char_name}' not found.")
+
+    update_dict = update.model_dump(exclude_none=True)
+    for key, value in update_dict.items():
+        target[key] = value
+
+    _save_json(book_id, "llm_characters.json", llm_chars)
+
+    # Update gender map if gender changed
+    if "gender" in update_dict:
+        genders = _load_json(book_id, "character_genders.json") or {}
+        genders[char_name] = update_dict["gender"]
+        _save_json(book_id, "character_genders.json", genders)
+
+    # Update alias map if aliases changed
+    if "aliases" in update_dict:
+        alias_map = _load_json(book_id, "alias_map.json") or {}
+        # Remove old aliases for this character
+        alias_map = {k: v for k, v in alias_map.items() if v != char_name}
+        # Add new aliases
+        for alias in update_dict["aliases"]:
+            if alias != char_name:
+                alias_map[alias] = char_name
+        _save_json(book_id, "alias_map.json", alias_map)
+
+    # Sync to MongoDB
+    try:
+        from src.core.db import update_character as db_update_char
+        db_update_char(book_id, char_name, update_dict)
+    except Exception:
+        pass
+
+    return {"status": "updated", "character": char_name, "updated_fields": list(update_dict.keys())}
+
+
 @router.get("/api/book/{book_id}/preprocess/chapter/{ch_idx}/segments")
 async def get_chapter_segments(book_id: str, ch_idx: int) -> dict[str, Any]:
     """Get all segments for a chapter with full data."""

@@ -91,6 +91,18 @@ export async function getCharacters(bookId: string) {
   return data;
 }
 
+export async function updateCharacter(
+  bookId: string,
+  charName: string,
+  updates: Record<string, unknown>
+) {
+  const { data } = await api.put(
+    `/book/${bookId}/preprocess/characters/${encodeURIComponent(charName)}`,
+    updates
+  );
+  return data;
+}
+
 export async function getChapterSegments(bookId: string, chapterIdx: number) {
   const { data } = await api.get(`/book/${bookId}/preprocess/chapter/${chapterIdx}/segments`);
   return data;

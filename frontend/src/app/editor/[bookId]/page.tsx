@@ -27,6 +27,7 @@ import QualityCheckPanel from "@/components/editor/QualityCheckPanel";
 import CharacterSheetsPanel from "@/components/editor/CharacterSheetsPanel";
 import AIChatPanel from "@/components/editor/AIChatPanel";
 import VersionsCarousel from "@/components/editor/VersionsCarousel";
+import CharacterManagement from "@/components/editor/CharacterManagement";
 
 const SENTIMENTS = ["positive", "negative", "neutral", "tense", "emotional"];
 
@@ -47,10 +48,12 @@ export default function EditorPage() {
     return sp.get("seg") ? +sp.get("seg")! : null;
   });
 
+  const [activeTab, setActiveTab] = useState<"editor" | "characters">("editor");
   const [chapters, setChapters] = useState<Record<string, ChapterInfo>>({});
   const [meta, setMeta] = useState<{ title?: string }>({});
   const [characters, setCharacters] = useState<CharacterInfo[]>([]);
   const [sheets, setSheets] = useState<Record<string, string>>({});
+  const [aliasMap, setAliasMap] = useState<Record<string, string>>({});
   const [selectedChapter, setSelectedChapter] = useState<number | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [selectedSegment, setSelectedSegment] = useState<Segment | null>(null);
@@ -133,6 +136,7 @@ export default function EditorPage() {
           setMeta(chapData.meta || {});
           setCharacters(charData.characters || []);
           setSheets(charData.sheets || {});
+          setAliasMap(charData.alias_map || {});
 
           const sortedKeys = chapKeys.sort((a, b) => +a - +b);
           const startCh = initialChapter !== null && chapKeys.includes(String(initialChapter))
@@ -502,7 +506,7 @@ export default function EditorPage() {
   return (
     <div className="h-screen flex flex-col bg-cream" style={{ lineHeight: 1.26 }}>
       {/* Header */}
-      <header className="bg-white border-b border-peach/30 px-4 py-3 flex items-center justify-between shrink-0">
+      <header className="bg-white border-b border-peach/30 px-4 py-2 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
           <a href="/" className="text-2xl">📖</a>
           <div>
@@ -510,26 +514,55 @@ export default function EditorPage() {
               {meta.title || bookId}
             </h1>
             <p className="text-xs text-gray-500">
-              {Object.keys(chapters).length} chapters, {segments.length} segments
+              {Object.keys(chapters).length} chapters, {characters.length} characters
             </p>
           </div>
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setShowCharPanel(!showCharPanel)}
-            className="px-3 py-1.5 text-sm rounded-lg bg-lavender/50 hover:bg-lavender transition-colors flex items-center gap-1"
-          >
-            <Users size={14} /> Characters
-          </button>
+        <div className="flex items-center gap-3">
+          {/* Tab Buttons */}
+          <div className="flex bg-cream rounded-lg p-0.5">
+            <button
+              onClick={() => setActiveTab("characters")}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors flex items-center gap-1 ${
+                activeTab === "characters" ? "bg-white shadow-sm text-coral" : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              <Users size={12} /> Characters
+            </button>
+            <button
+              onClick={() => setActiveTab("editor")}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors flex items-center gap-1 ${
+                activeTab === "editor" ? "bg-white shadow-sm text-coral" : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              <BookOpen size={12} /> Editor
+            </button>
+          </div>
           <a
             href={`/book/${bookId}`}
-            className="px-3 py-1.5 text-sm rounded-lg bg-coral text-white hover:bg-coral/80 transition-colors flex items-center gap-1 font-semibold"
+            className="px-3 py-1.5 text-xs rounded-lg bg-coral text-white hover:bg-coral/80 transition-colors flex items-center gap-1 font-semibold"
           >
-            <BookOpen size={14} /> View Book
+            View Book
           </a>
         </div>
       </header>
 
+      {/* Character Management Tab */}
+      {activeTab === "characters" && (
+        <CharacterManagement
+          bookId={bookId}
+          characters={characters}
+          sheets={sheets}
+          aliasMap={aliasMap}
+          onCharactersUpdate={(chars, newSheets) => {
+            setCharacters(chars);
+            setSheets(newSheets);
+          }}
+        />
+      )}
+
+      {/* Editor Tab */}
+      {activeTab === "editor" && (
       <div className="flex flex-1 overflow-hidden">
         {/* Left Panel: Chapters + Segments */}
         <div className="w-64 bg-white border-r border-peach/30 overflow-y-auto shrink-0">
@@ -831,6 +864,7 @@ export default function EditorPage() {
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }
