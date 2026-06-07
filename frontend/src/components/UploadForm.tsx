@@ -255,7 +255,7 @@ export function UploadForm({ onStartGeneration }: Props) {
               loading ? "opacity-50 cursor-not-allowed" : ""
             }`}
           >
-            {loading ? "Starting..." : "Generate Picture Book"}
+            {loading ? "Preprocessing... (this takes a few minutes)" : "Generate Picture Book"}
           </button>
 
           {error && (

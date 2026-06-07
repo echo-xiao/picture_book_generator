@@ -47,6 +47,9 @@ def _generate_image(prompt: str, save_path: Path, max_retries: int = 2) -> str:
                 contents=prompt,
                 config=genai.types.GenerateContentConfig(
                     response_modalities=["TEXT", "IMAGE"],
+                    image_config=genai.types.ImageConfig(
+                        aspect_ratio="1:1",
+                    ),
                 ),
             )
             if not response.candidates:

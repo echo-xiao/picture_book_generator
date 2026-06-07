@@ -59,21 +59,31 @@ def export_pdf(
     cover_image: str = "",
     special_dir: str = "",
     chapter_num: int | None = None,
+    chapter_nums: list[int] | None = None,
 ) -> str:
     """Export the picture book as a PDF.
 
     Pages with images use the image as full-page (text is already embedded
     by Gemini in the illustration). No additional text overlay.
 
-    Special pages (cover, chapter cover, chapter ending, back cover) are
-    inserted from the special_dir if available.
+    Args:
+        pages: List of page dicts with 'image_path' and 'text'.
+        book_title: Title for the PDF.
+        output_path: Where to save the PDF.
+        cover_image: Override book cover image path.
+        special_dir: Directory containing special page images.
+        chapter_num: Single chapter number (legacy, for backward compat).
+        chapter_nums: List of chapter numbers to include special pages for.
     """
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    # Auto-detect special_dir if not provided
     if not special_dir:
         special_dir = str(output.parent / "special")
+
+    # Normalize chapter_nums
+    if chapter_nums is None and chapter_num is not None:
+        chapter_nums = [chapter_num]
 
     width, height = PAGE_SIZE
     font = _register_fonts()
@@ -84,24 +94,36 @@ def export_pdf(
 
     special = Path(special_dir)
 
-    # 1. Book cover (full image, no text overlay)
+    # 1. Book cover
     book_cover = cover_image or _find_image(special, "book_cover")
     if book_cover:
         _draw_full_image_page(c, book_cover, width, height)
 
-    # 2. Chapter cover (if available)
-    if chapter_num is not None:
-        ch_cover = _find_image(special, f"chapter_{chapter_num:02d}_cover")
-        if ch_cover:
-            _draw_full_image_page(c, ch_cover, width, height)
+    # 2. Content pages — each page group is tagged with _chapter_num if from combined PDF
+    # Pages should have _chapter_num set by build_combined_pdf
+    current_chapter = None
+    for page in pages:
+        ch_num = page.get("_chapter_num")
 
-    # 3. Content pages — image fills entire page, no text overlay
-    for idx, page in enumerate(pages):
+        # Insert chapter cover/ending when chapter changes
+        if ch_num is not None and ch_num != current_chapter:
+            # End previous chapter
+            if current_chapter is not None:
+                ch_ending = _find_image(special, f"chapter_{current_chapter:02d}_ending")
+                if ch_ending:
+                    _draw_full_image_page(c, ch_ending, width, height)
+
+            # Start new chapter
+            current_chapter = ch_num
+            ch_cover = _find_image(special, f"chapter_{ch_num:02d}_cover")
+            if ch_cover:
+                _draw_full_image_page(c, ch_cover, width, height)
+
+        # Render the page
         image_path = page.get("image_path", "")
         if image_path and os.path.exists(image_path):
             _draw_full_image_page(c, image_path, width, height)
         else:
-            # Fallback: text-only page
             text = page.get("text", "")
             if text:
                 bg = HexColor("#fffaf4")
@@ -120,13 +142,13 @@ def export_pdf(
                     y -= 18 * 1.6
                 c.showPage()
 
-    # 4. Chapter ending (if available)
-    if chapter_num is not None:
-        ch_ending = _find_image(special, f"chapter_{chapter_num:02d}_ending")
+    # End last chapter
+    if current_chapter is not None:
+        ch_ending = _find_image(special, f"chapter_{current_chapter:02d}_ending")
         if ch_ending:
             _draw_full_image_page(c, ch_ending, width, height)
 
-    # 5. Back cover
+    # 3. Back cover
     back_cover = _find_image(special, "back_cover")
     if back_cover:
         _draw_full_image_page(c, back_cover, width, height)

@@ -134,16 +134,17 @@ def generate_chapter(
     chapter_idx: int,
     page_filter: list[int] | None = None,
     age_group: str = "4-6",
-    with_special: bool = False,
 ):
     """Generate all pages for a chapter.
 
-    Pipeline (minimized LLM usage):
+    Pipeline:
+    0. Book cover + chapter cover (auto, cached)
     1. Character sheets (LLM image gen, cached)
     2. Text simplification (LLM text, per-page)
     3. Illustration prompts (ALGORITHM — template-based, no LLM)
     4. Generate illustrations (LLM image gen)
-    5. Special pages + PDF
+    5. Quality check (Gemini Vision, auto)
+    6. Chapter ending + back cover (auto, cached)
     """
     from src.agent.text_simplifier import simplify_text
     from src.generation.character_sheet import generate_character_sheets, _assign_visual_identities
@@ -223,6 +224,42 @@ def generate_chapter(
     segments, ch_title = _get_chapter_segments(data, chapter_idx)
     print(f"\n=== Generating Chapter {chapter_idx}: {ch_title} ===")
     print(f"  Segments: {len(segments)}")
+
+    # --- Auto-generate book cover (once, if not exists) ---
+    if not page_filter:
+        from src.generation.special_pages import (
+            generate_book_cover, generate_chapter_cover,
+            generate_chapter_ending, generate_back_cover,
+        )
+        from src.generation.character_sheet import _assign_visual_identities as _avi
+
+        special_dir = GENERATED_DIR / book_id / "special"
+        special_dir.mkdir(parents=True, exist_ok=True)
+        cover_exists = any((special_dir / f"book_cover{ext}").exists() for ext in (".png", ".jpg"))
+        if not cover_exists:
+            main_profiles = [p for p in profiles if p.get("role") in ("main", "supporting")][:5]
+            if not main_profiles:
+                main_profiles = profiles[:5]
+            main_profiles = _avi(main_profiles)
+            print(f"\n[0] Generating book cover...")
+            t0 = time.time()
+            generate_book_cover(title, main_profiles, book_id)
+            print(f"  Book cover generated in {time.time() - t0:.1f}s")
+
+        # --- Chapter cover ---
+        ch_cover_exists = any(
+            (special_dir / f"chapter_{chapter_idx + 1}_cover{ext}").exists() for ext in (".png", ".jpg")
+        )
+        if not ch_cover_exists:
+            main_profiles_ch = [p for p in profiles if p.get("role") in ("main", "supporting")][:5]
+            if not main_profiles_ch:
+                main_profiles_ch = profiles[:5]
+            main_profiles_ch = _avi(main_profiles_ch)
+            summary = segments[0].get("text", "")[:200] if segments else ""
+            print(f"  Generating chapter {chapter_idx + 1} cover...")
+            t0 = time.time()
+            generate_chapter_cover(ch_title, chapter_idx + 1, summary, main_profiles_ch, book_id)
+            print(f"  Chapter cover generated in {time.time() - t0:.1f}s")
 
     # Build scenes from ALL segments (no filtering)
     # Use precomputed characters_in_scene from coreference resolution if available,
@@ -356,17 +393,159 @@ def generate_chapter(
         for p in page_prompts
     ], dt)
 
-    # Step 4: Generate illustrations
-    print(f"\n[4/4] Generating illustrations ({len(page_prompts)} pages)...")
-    t0 = time.time()
+    # Step 4: Generate illustrations + immediate quality check per page
+    from src.generation.illustration import _get_client, _generate_single_page
+    from pathlib import Path as _Path
+
+    print(f"\n[4/4] Generating illustrations + quality check ({len(page_prompts)} pages)...")
     chapter_pages_dir = chapter_dir / "pages"
-    illustrations = generate_illustrations(page_prompts, character_sheets, book_id, pages_dir=chapter_pages_dir)
-    dt = time.time() - t0
-    print(f"  Generated {len(illustrations)} illustrations in {dt:.1f}s")
+    chapter_pages_dir.mkdir(parents=True, exist_ok=True)
+    quality_dir = chapter_dir / "quality"
+    quality_dir.mkdir(parents=True, exist_ok=True)
+
+    valid_sheets = [s for s in character_sheets if s.get("sheet_path") and _Path(s["sheet_path"]).exists()]
+    img_client = _get_client()
+
+    try:
+        from src.generation.gemini_consistency_check import (
+            check_page_quality,
+            check_style_consistency,
+        )
+        quality_available = True
+    except Exception:
+        quality_available = False
+
+    illustrations = []
+    per_page_results = []
+    per_character_scores: dict[str, list[int]] = {}
+
+    for idx_p, page_prompt in enumerate(page_prompts):
+        page_num = page_prompt.get("page_number", idx_p + 1)
+        save_path = chapter_pages_dir / f"page_{page_num:03d}"
+        scene = simplified[idx_p] if idx_p < len(simplified) else {}
+
+        # Check if already exists (checkpoint)
+        existing = None
+        for ext in (".png", ".jpg"):
+            candidate = save_path.with_suffix(ext)
+            if candidate.exists():
+                existing = str(candidate)
+                break
+
+        if existing:
+            print(f"  Page {page_num}: cached, skipping generation")
+            ill_path = existing
+        else:
+            t_page = time.time()
+            success, ill_path, prompt = _generate_single_page(
+                img_client, page_prompt, valid_sheets, save_path,
+            )
+            dt_page = time.time() - t_page
+            if not success:
+                print(f"  Page {page_num}: generation FAILED ({dt_page:.1f}s)")
+                illustrations.append({"page_number": page_num, "image_path": "", "prompt_used": prompt})
+                continue
+            # Resolve actual path
+            for ext in (".png", ".jpg"):
+                candidate = save_path.with_suffix(ext)
+                if candidate.exists():
+                    ill_path = str(candidate)
+                    break
+            print(f"  Page {page_num}: generated ({dt_page:.1f}s)")
+
+        illustrations.append({"page_number": page_num, "image_path": ill_path, "prompt_used": ""})
+
+        # Immediate quality check
+        if quality_available and ill_path:
+            scene_chars = scene.get("key_characters", [])
+            page_text = scene.get("page_text", scene.get("text", ""))
+            relevant_sheets = [s for s in character_sheets if s["character_name"] in scene_chars]
+
+            t_q = time.time()
+            result = check_page_quality(ill_path, relevant_sheets, page_text, scene_chars, page_num)
+            result["page"] = page_num
+            per_page_results.append(result)
+
+            # Save per-page quality file
+            quality_file = quality_dir / f"page_{page_num:03d}_quality.json"
+            quality_file.write_text(
+                json.dumps(result, indent=2, default=str, ensure_ascii=False), encoding="utf-8",
+            )
+
+            for c in result.get("character_consistency", {}).get("characters", []):
+                per_character_scores.setdefault(c["name"], []).append(c.get("score", 100))
+
+            score = result.get("overall_score", 100)
+            issues = []
+            if result.get("spelling", {}).get("errors"):
+                issues.append(f"spell:{len(result['spelling']['errors'])}")
+            if result.get("duplicate_characters", {}).get("duplicates"):
+                issues.append(f"dup:{len(result['duplicate_characters']['duplicates'])}")
+            if result.get("name_face_mismatch", {}).get("mismatches"):
+                issues.append(f"name:{len(result['name_face_mismatch']['mismatches'])}")
+            if result.get("character_count", {}).get("missing"):
+                issues.append(f"miss:{result['character_count']['missing']}")
+            status = "OK" if score >= 80 else "WARN" if score >= 60 else "BAD"
+            issues_str = f" ({', '.join(issues)})" if issues else ""
+            print(f"           quality: {score}% [{status}]{issues_str} ({time.time()-t_q:.1f}s)")
+
     _save_step("illustrations", [
         {"page": ill.get("page_number"), "path": ill.get("image_path", "")}
         for ill in illustrations
-    ], dt)
+    ])
+
+    # Style coherence (across all pages, at the end) + summary
+    try:
+        ill_paths = [ill.get("image_path", "") for ill in illustrations if ill.get("image_path")]
+
+        per_character_avg = []
+        for name, scores in per_character_scores.items():
+            avg = round(sum(scores) / len(scores)) if scores else 100
+            per_character_avg.append({"name": name, "score": avg})
+        char_overall = round(sum(c["score"] for c in per_character_avg) / len(per_character_avg)) if per_character_avg else 100
+
+        # Style coherence vs book cover
+        style_result = {"score": 100, "per_page": [], "issues": []}
+        if quality_available and len(ill_paths) >= 2:
+            cover_path = None
+            special_dir = GENERATED_DIR / book_id / "special"
+            for ext in (".png", ".jpg"):
+                candidate = special_dir / f"book_cover{ext}"
+                if candidate.exists():
+                    cover_path = str(candidate)
+                    break
+            style_result = check_style_consistency(ill_paths, reference_path=cover_path)
+
+        n = max(len(per_page_results), 1)
+        dim_scores = {
+            "character_consistency": round(sum(r.get("character_consistency", {}).get("score", 100) for r in per_page_results) / n),
+            "spelling": round(sum(r.get("spelling", {}).get("score", 100) for r in per_page_results) / n),
+            "duplicate_characters": round(sum(r.get("duplicate_characters", {}).get("score", 100) for r in per_page_results) / n),
+            "name_face_mismatch": round(sum(r.get("name_face_mismatch", {}).get("score", 100) for r in per_page_results) / n),
+            "character_count": round(sum(r.get("character_count", {}).get("score", 100) for r in per_page_results) / n),
+            "style_coherence": style_result.get("score", 100),
+        }
+
+        consistency_result = {
+            "overall_score": round(sum(dim_scores.values()) / len(dim_scores)),
+            "dimensions": dim_scores,
+            "character_match": {"score": char_overall, "per_character": per_character_avg},
+            "style_coherence": style_result,
+            "per_page": per_page_results,
+        }
+
+        print(f"\n  === Chapter Quality Summary ===")
+        print(f"  Overall: {consistency_result['overall_score']}%")
+        for dim, sc in dim_scores.items():
+            st = "OK" if sc >= 80 else "WARN" if sc >= 60 else "BAD"
+            print(f"    {dim}: {sc}% [{st}]")
+
+        consistency_path = chapter_dir / "consistency.json"
+        consistency_path.write_text(
+            json.dumps(consistency_result, indent=2, default=str, ensure_ascii=False), encoding="utf-8",
+        )
+    except Exception as e:
+        logger.warning("Summary quality failed: %s", e)
 
     # Save chapter data for later PDF merge
     chapter_data = {
@@ -388,12 +567,36 @@ def generate_chapter(
     )
     print(f"  Chapter data saved: {chapter_data_path}")
 
-    # Generate chapter-specific special pages
-    if with_special:
-        print(f"  Generating special pages...")
-        t0 = time.time()
-        generate_special_pages(book_id, data, chapter_idx)
-        _save_step("special_pages", {"chapter": chapter_idx}, time.time() - t0)
+    # Generate chapter ending + back cover (if not single-page regen)
+    if not page_filter:
+        from src.generation.special_pages import (
+            generate_chapter_ending, generate_back_cover,
+        )
+        from src.generation.character_sheet import _assign_visual_identities as _avi2
+        special_dir = GENERATED_DIR / book_id / "special"
+
+        # Chapter ending
+        ch_ending_exists = any(
+            (special_dir / f"chapter_{chapter_idx + 1}_ending{ext}").exists() for ext in (".png", ".jpg")
+        )
+        if not ch_ending_exists:
+            main_profiles_end = [p for p in profiles if p.get("role") in ("main", "supporting")][:5]
+            if not main_profiles_end:
+                main_profiles_end = profiles[:5]
+            main_profiles_end = _avi2(main_profiles_end)
+            ending_text = segments[-1].get("text", "")[:200] if segments else ""
+            print(f"  Generating chapter {chapter_idx + 1} ending...")
+            t0 = time.time()
+            generate_chapter_ending(ch_title, chapter_idx + 1, ending_text, main_profiles_end, book_id)
+            print(f"  Chapter ending generated in {time.time() - t0:.1f}s")
+
+        # Back cover (once)
+        back_exists = any((special_dir / f"back_cover{ext}").exists() for ext in (".png", ".jpg"))
+        if not back_exists:
+            print(f"  Generating back cover...")
+            t0 = time.time()
+            generate_back_cover(title, book_id)
+            print(f"  Back cover generated in {time.time() - t0:.1f}s")
 
     # Save to MongoDB
     try:
@@ -537,7 +740,6 @@ def main():
             args.book, data, ch_idx,
             page_filter=page_filter,
             age_group=args.age,
-            with_special=args.with_special,
         )
 
     # Build combined PDF with all requested chapters
