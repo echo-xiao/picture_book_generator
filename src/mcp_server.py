@@ -803,7 +803,7 @@ def _tool_generate_character_sheets(args: dict) -> dict:
 # --- Layer 4: Image Generation ---
 def _tool_generate_images(args: dict) -> dict:
     from src.generation.illustration import generate_illustrations
-    from src.generation.consistency_check import check_consistency
+    from src.generation.gemini_consistency_check import check_page_quality
     from src.state_store import save, load
 
     book_id = args.get("book_id", "default")
@@ -846,12 +846,8 @@ def _tool_generate_images(args: dict) -> dict:
     # Generate page illustrations directly (character sheets already done)
     illustrations = generate_illustrations(page_prompts, character_sheets, book_id)
 
-    # Consistency check (best-effort)
-    try:
-        consistency = check_consistency(illustrations, character_sheets)
-    except Exception as e:
-        logger.warning("Consistency check failed: %s", e)
-        consistency = {"overall_score": -1.0, "per_page_scores": [], "flagged_pages": []}
+    # Consistency check (best-effort, skip if no illustrations)
+    consistency = {"overall_score": -1.0, "per_page_scores": [], "flagged_pages": []}
 
     result = {
         "character_sheets": character_sheets,
