@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Users, RefreshCw, Save } from "lucide-react";
-import { updateCharacter, regenerateCharacterSheet, getCharacters } from "@/lib/api";
+import { updateCharacter, regenerateCharacterSheet, getCharacters, getCharacterSheetHistory } from "@/lib/api";
 import type { CharacterInfo } from "@/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -26,11 +26,14 @@ export default function CharacterManagement({
   const [editing, setEditing] = useState<Record<string, any>>({});
   const [saving, setSaving] = useState(false);
   const [regenning, setRegenning] = useState(false);
+  const [sheetHistory, setSheetHistory] = useState<Array<{ url: string; version: string; timestamp: number }>>([]);
+  const [activeSheetUrl, setActiveSheetUrl] = useState<string | null>(null);
 
   const selected = characters.find(c => c.canonical_name === selectedChar);
 
   const selectChar = (char: CharacterInfo) => {
     setSelectedChar(char.canonical_name);
+    setActiveSheetUrl(null);
     setEditing({
       gender: char.gender || "unknown",
       role: char.role || "supporting",
@@ -38,6 +41,18 @@ export default function CharacterManagement({
       description: char.description || "",
     });
   };
+
+  // Load sheet history when character changes
+  useEffect(() => {
+    if (!selectedChar) return;
+    getCharacterSheetHistory(bookId, selectedChar)
+      .then(data => {
+        setSheetHistory(data.images || []);
+        const current = data.images?.find(i => i.version === "current");
+        setActiveSheetUrl(current?.url || null);
+      })
+      .catch(() => { setSheetHistory([]); setActiveSheetUrl(null); });
+  }, [bookId, selectedChar, regenning]);
 
   // Auto-select first character on mount
   if (selected && Object.keys(editing).length === 0) {
@@ -113,33 +128,73 @@ export default function CharacterManagement({
       {/* Middle + Right */}
       {selected ? (
         <div className="flex-1 flex overflow-hidden">
-          {/* Middle: Character Sheet Image (main area) */}
-          <div className="flex-1 overflow-y-auto p-6 border-r border-peach/20">
-            <h2 className="font-display text-lg font-bold text-gray-800 mb-3">{selected.canonical_name}</h2>
-            <div className="flex-1 flex flex-col min-h-0">
-              {sheets[selected.canonical_name] ? (
-                <img
-                  src={`${API_BASE}${sheets[selected.canonical_name]}`}
-                  alt={selected.canonical_name}
-                  className="max-h-[calc(100vh-180px)] w-auto mx-auto rounded-xl shadow-md object-contain"
-                />
-              ) : regenning ? (
-                <div className="flex-1 bg-peach/10 rounded-xl flex flex-col items-center justify-center gap-3">
-                  <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-coral" />
-                  <p className="text-sm text-gray-500">Generating sheet...</p>
-                  <p className="text-xs text-gray-400">~30 seconds</p>
-                </div>
-              ) : (
-                <div className="flex-1 bg-peach/20 rounded-xl flex flex-col items-center justify-center text-gray-400 gap-2">
-                  <Users size={32} />
-                  <p className="text-xs">No sheet yet</p>
-                </div>
-              )}
+          {/* Middle: Character Sheet + History thumbnails */}
+          <div className="flex-1 flex overflow-hidden border-r border-peach/20">
+            {/* Main sheet image */}
+            <div className="flex-1 overflow-y-auto p-6 flex flex-col">
+              <h2 className="font-display text-lg font-bold text-gray-800 mb-3 shrink-0">{selected.canonical_name}</h2>
+              <div className="flex-1 flex items-center justify-center min-h-0">
+                {(activeSheetUrl || sheets[selected.canonical_name]) ? (
+                  <img
+                    src={`${API_BASE}${activeSheetUrl || sheets[selected.canonical_name]}?t=${Date.now()}`}
+                    alt={selected.canonical_name}
+                    className="max-h-[calc(100vh-180px)] max-w-full rounded-xl shadow-md object-contain"
+                  />
+                ) : regenning ? (
+                  <div className="w-full max-w-md aspect-square bg-peach/10 rounded-xl flex flex-col items-center justify-center gap-3">
+                    <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-coral" />
+                    <p className="text-sm text-gray-500">Generating sheet...</p>
+                    <p className="text-xs text-gray-400">~30 seconds</p>
+                  </div>
+                ) : (
+                  <div className="w-full max-w-md aspect-square bg-peach/20 rounded-xl flex flex-col items-center justify-center text-gray-400 gap-2">
+                    <Users size={32} />
+                    <p className="text-xs">No sheet yet</p>
+                    <p className="text-[10px]">Click Save & Regenerate to create</p>
+                  </div>
+                )}
+              </div>
             </div>
+
+            {/* History thumbnails (vertical, right side of sheet) */}
+            {sheetHistory.length > 1 && (
+              <div className="w-20 shrink-0 overflow-y-auto p-2 space-y-2 border-l border-peach/10">
+                <p className="text-[9px] text-gray-400 font-semibold text-center">History</p>
+                {sheetHistory.map((img, idx) => (
+                  <div key={idx}>
+                    <img
+                      src={`${API_BASE}${img.url}?t=${img.timestamp}`}
+                      alt={img.version === "current" ? "Current" : `v${sheetHistory.length - idx}`}
+                      onClick={() => setActiveSheetUrl(img.url)}
+                      className={`w-full aspect-square object-cover rounded-lg cursor-pointer border-2 transition-colors ${
+                        (activeSheetUrl || sheets[selected.canonical_name]) === img.url
+                          ? "border-coral"
+                          : "border-transparent hover:border-coral/50"
+                      }`}
+                    />
+                    <p className="text-[8px] text-gray-400 text-center mt-0.5">
+                      {img.version === "current" ? "Now" : `v${sheetHistory.length - idx}`}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
-          {/* Right: Edit Fields */}
+          {/* Right: Portrait + Edit Fields */}
           <div className="w-[320px] shrink-0 overflow-y-auto p-5 space-y-3">
+            {/* Portrait (cropped from sheet - top-left FRONT view) */}
+            {sheets[selected.canonical_name] && (
+              <div className="flex justify-center mb-2">
+                <div className="w-24 h-24 rounded-full overflow-hidden border-3 border-peach/50 shadow-md">
+                  <img
+                    src={`${API_BASE}${sheets[selected.canonical_name]}?t=${Date.now()}`}
+                    alt={`${selected.canonical_name} portrait`}
+                    className="w-[300%] h-[300%] object-cover object-[15%_8%]"
+                  />
+                </div>
+              </div>
+            )}
 
             <div className="flex gap-4">
               <div className="flex-1">

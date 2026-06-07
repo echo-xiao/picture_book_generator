@@ -470,13 +470,17 @@ async def regenerate_character_sheet(
     """Regenerate character sheet for a specific character."""
     from src.generation.character_sheet import _safe_filename
 
-    # Delete existing sheet
+    # Move existing sheet to history
     chars_dir = GENERATED_DIR / book_id / "characters"
+    history_dir = chars_dir / "history"
+    history_dir.mkdir(parents=True, exist_ok=True)
     safe = _safe_filename(char_name)
+    import time as _time
+    ts = int(_time.time())
     for ext in (".png", ".jpg"):
         old = chars_dir / f"{safe}_sheet{ext}"
         if old.exists():
-            old.unlink()
+            old.rename(history_dir / f"{safe}_sheet_{ts}{ext}")
 
     async def _regen():
         from src.generation.character_sheet import generate_character_sheets

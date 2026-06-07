@@ -111,6 +111,40 @@ async def update_character(book_id: str, char_name: str, update: CharacterUpdate
     return {"status": "updated", "character": char_name, "updated_fields": list(update_dict.keys())}
 
 
+@router.get("/api/book/{book_id}/preprocess/characters/{char_name}/history")
+async def get_character_sheet_history(book_id: str, char_name: str) -> dict[str, Any]:
+    """Get current + historical character sheet images."""
+    import re as _re
+    from src.generation.character_sheet import _safe_filename
+
+    chars_dir = GENERATED_DIR / book_id / "characters"
+    safe = _safe_filename(char_name)
+    images = []
+
+    # Current sheet
+    for ext in (".png", ".jpg"):
+        current = chars_dir / f"{safe}_sheet{ext}"
+        if current.exists():
+            images.append({
+                "url": f"/static/{book_id}/characters/{current.name}",
+                "version": "current",
+                "timestamp": current.stat().st_mtime,
+            })
+            break
+
+    # History
+    history_dir = chars_dir / "history"
+    if history_dir.exists():
+        for f in sorted(history_dir.glob(f"{safe}_sheet_*.*"), reverse=True):
+            images.append({
+                "url": f"/static/{book_id}/characters/history/{f.name}",
+                "version": f.stem.split("_")[-1],
+                "timestamp": float(f.stem.split("_")[-1]),
+            })
+
+    return {"images": images}
+
+
 @router.get("/api/book/{book_id}/preprocess/chapter/{ch_idx}/segments")
 async def get_chapter_segments(book_id: str, ch_idx: int) -> dict[str, Any]:
     """Get all segments for a chapter with full data."""

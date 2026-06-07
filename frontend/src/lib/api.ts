@@ -91,6 +91,11 @@ export async function getCharacters(bookId: string) {
   return data;
 }
 
+export async function getCharacterSheetHistory(bookId: string, charName: string) {
+  const { data } = await api.get(`/book/${bookId}/preprocess/characters/${encodeURIComponent(charName)}/history`);
+  return data as { images: Array<{ url: string; version: string; timestamp: number }> };
+}
+
 export async function updateCharacter(
   bookId: string,
   charName: string,

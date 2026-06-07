@@ -59,13 +59,7 @@ export default function CharacterSheetsPanel({
                     No sheet
                   </div>
                 )}
-                <p className="text-[10px] text-gray-500 mb-2">{char.description}</p>
-                <button
-                  onClick={() => onRegenerateSheet(char.canonical_name)}
-                  className="text-xs text-coral hover:text-coral/80 font-semibold"
-                >
-                  Regenerate Sheet
-                </button>
+                <p className="text-[10px] text-gray-500">{char.description}</p>
               </div>
             );
           })}
