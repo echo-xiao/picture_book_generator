@@ -202,7 +202,7 @@ export default function EditorPage() {
           setSegments((prev) => prev.map((s) => (s.id === selectedSegId ? updated : s)));
         }
       })
-      .catch((e) => console.error("Auto simplify failed:", e));
+      .catch(() => {});
   }, [selectedSegId]);
 
   // Load history when segment changes

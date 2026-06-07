@@ -1,316 +1,278 @@
 # Picture Book Generator
 
-Any book → children's picture book. LLM-powered analysis + AI illustrations + interactive editing + PDF output.
+Transform any book into a children's picture book with AI-powered analysis, illustration generation, and interactive editing.
 
-Google Cloud Rapid Agent Hackathon entry. Deadline: 2026-06-11.
-Hackathon: https://rapid-agent.devpost.com/
+**Google Cloud Rapid Agent Hackathon** | Deadline: 2026-06-11 | [Devpost](https://rapid-agent.devpost.com/)
 
-## Architecture
+## How It Works
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│              6-LAYER PREPROCESS (once per book)                 │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Layer 1: Extract Text → chapters                               │
-│       ↓                                                         │
-│  Layer 2: LLM Character ID → characters + aliases + gender      │
-│       ↓                                                         │
-│  Layer 3: Character Sheets (Gemini Image, on-demand per chapter)│
-│       ↓                                                         │
-│  Layer 4: Alias Replacement → cleaned text                      │
-│       ↓                                                         │
-│  Layer 5: TextTiling Segmentation (on cleaned text)             │
-│       ↓                                                         │
-│  Layer 6: LLM Annotation → characters_in_scene + actions +     │
-│           scene_background + sentiment + key_events             │
-│                                                                 │
-├─────────────────────────────────────────────────────────────────┤
-│              GENERATE (per chapter, on demand)                  │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  1. Generate character sheets (reuse existing)                  │
-│  2. LLM simplify text → children's language (DeepSeek)          │
-│  3. Build illustration prompts (single scene enforcement)       │
-│  4. Gemini Image → page illustrations (with style consistency)  │
-│  5. Auto quality check (5 dimensions)                           │
-│  6. Auto-fix loop (quality < 70% → AI fixes prompts)            │
-│  7. PDF export                                                  │
-│                                                                 │
-├─────────────────────────────────────────────────────────────────┤
-│              INTERACTIVE EDITOR (frontend)                      │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  - View/edit each page: text, characters, actions, background   │
-│  - AI Chat assistant for conversational prompt editing          │
-│  - Regenerate single pages with progress spinner                │
-│  - Auto quality check + auto-fix feedback loop                  │
-│  - Version history with thumbnail carousel                      │
-│  - Character sheet management with fuzzy matching               │
-│  - PDF export                                                   │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+Upload a book (.txt/.pdf/.epub)
+    ↓
+Preprocess: extract text → identify characters → segment into scenes → annotate
+    ↓
+Generate: simplify text → build prompts → generate illustrations → quality check
+    ↓
+Edit: interactive editor with AI chat → regenerate → auto quality check → auto fix
+    ↓
+Export: PDF picture book
+```
+
+## Quick Start
+
+```bash
+# 1. Install
+pip install -r requirements.txt
+cd frontend && npm install && cd ..
+
+# 2. Configure
+cp .env.example .env
+# Add GEMINI_API_KEY (required) and DEEPSEEK_API_KEY (optional, cheaper text tasks)
+
+# 3. Start backend
+python -m uvicorn src.app:app --port 8000
+
+# 4. Start frontend (another terminal)
+cd frontend && npm run dev
+
+# 5. Open http://localhost:3000
 ```
 
 ## Features
 
-### Frontend
+### Interactive Editor (`/editor/{bookId}`)
 
-#### Home Page (`/`)
-- Upload books (TXT/PDF/EPUB)
-- Browse book library
-- Navigate to Editor or Book Reader
+| Area | Features |
+|------|----------|
+| **Illustration** | View current illustration, regenerate with progress spinner (30-60s) |
+| **Versions** | Thumbnail carousel of current + all history versions, click to switch |
+| **Prompt Editing** | Edit simplified text, scene background, characters & actions, summary, sentiment |
+| **AI Chat** | Describe what you want in natural language → AI auto-fills prompt fields |
+| **Quality Check** | 5-dimension auto scoring after each regeneration |
+| **Auto Fix** | Score < 70% → AI automatically fixes prompts based on quality feedback |
+| **Character Sheets** | Fuzzy-matched reference images, regenerate per character |
+| **URL Persistence** | Chapter/segment position saved in URL across refreshes |
+| **Auto Simplify** | Empty simplified text auto-generated when switching segments |
 
-#### Book Reader (`/book/{bookId}`)
-- Full-screen page-flip reading experience
-- Keyboard navigation (arrow keys, space)
-- Bottom thumbnail carousel for quick jumping
-- Click any page to jump to Editor
+### Quality Check (5 Dimensions)
 
-#### Interactive Editor (`/editor/{bookId}`)
-
-**Left Sidebar** — Chapter & segment navigation with character tags
-
-**Col 1 — Illustration (40%)**
-- Current illustration display with regenerate button
-- Generation progress spinner with time estimate
-- Original text display
-
-**Col 2 — Prompt Editing (36%)**
-- **Versions carousel**: Current + all history thumbnails, click to switch, highlighted selection
-- **Simplified Text**: Editable, auto-generated when empty, manual "Generate" button
-- **Scene Background**: Editable, auto/manual generation
-- **Characters & Actions**: Add/remove/edit character-action pairs
-- **Summary & Sentiment**: Editable summary + sentiment dropdown
-- **AI Chat Assistant**: Conversational prompt editing — describe what you want, AI auto-fills fields. Collapsible panel.
-- **Save / Save & Regen** buttons
-
-**Col 3 — Quality & Reference (flex)**
-- **Quality Check**: 5-dimension scoring (Character Match, Spelling, Duplicates, Name-Face Match, Character Count), per-character breakdown, detailed issues list, manual "Run" button
-- **Character Sheets**: Fuzzy-matched character reference images with description, regenerate per character
-
-**Automatic Behaviors**
-- Switching segments auto-generates simplified text if empty
-- Regenerate completion triggers auto quality check
-- Quality score < 70% auto-sends feedback to AI Chat to fix prompts
-- URL preserves chapter/segment position across refreshes (`?ch=4&seg=56`)
-
-### Backend API
-
-#### Book Management
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/health` | GET | Health check |
-| `/api/generate` | POST | Create book from text |
-| `/api/generate/upload` | POST | Create book from file upload |
-| `/api/books` | GET | List all books |
-| `/api/books/preprocessed` | GET | List preprocessed books |
-| `/api/book/{id}` | GET | Get book details |
-| `/api/book/{id}` | DELETE | Delete book |
-| `/api/book/{id}/html` | GET | HTML version |
-| `/api/book/{id}/pdf` | GET | PDF download |
-| `/api/book/{id}/preprocess/progress` | GET | Preprocessing progress |
-
-#### Editor & Segments
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/book/{id}/preprocess/chapters` | GET | Chapter list with segment counts |
-| `/api/book/{id}/preprocess/characters` | GET | Character list + sheet URLs |
-| `/api/book/{id}/preprocess/chapter/{ch}/segments` | GET | Segments for a chapter |
-| `/api/book/{id}/segment/{seg}` | PUT | Update segment fields |
-| `/api/book/{id}/segment/{seg}/history` | GET | Illustration version history |
-| `/api/book/{id}/segment/{seg}/simplify` | POST | Generate simplified text |
-| `/api/book/{id}/segment/{seg}/background` | POST | Generate scene background |
-| `/api/book/{id}/segment/{seg}/summarize` | POST | Generate summary + sentiment |
-| `/api/book/{id}/segment/{seg}/chat` | POST | AI chat for prompt editing |
-
-#### Generation & Quality
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/book/{id}/segment/{seg}/regenerate` | POST | Regenerate illustration |
-| `/api/book/{id}/chapter/{ch}/generate` | POST | Generate entire chapter |
-| `/api/book/{id}/chapter/{ch}/progress` | GET | Chapter generation progress |
-| `/api/book/{id}/segment/{seg}/quality` | GET | Get cached quality result |
-| `/api/book/{id}/segment/{seg}/quality` | POST | Run quality check |
-| `/api/book/{id}/chapter/{ch}/consistency` | GET/POST | Chapter consistency check |
-| `/api/book/{id}/characters/{name}/regenerate` | POST | Regenerate character sheet |
-
-### Pipeline
-
-#### Phase 1: Preprocess (`scripts/preprocess_book.py`)
-1. **Extract text** — TXT/PDF/EPUB → chapters
-2. **LLM Character ID** — Identify characters, aliases, gender, appearance
-3. **Character Sheets** — Gemini Image reference sheets (on-demand)
-4. **Alias Replacement** — Normalize character names in text
-5. **TextTiling Segmentation** — Split into scene segments
-6. **LLM Annotation** — Per-segment: characters, actions, background, sentiment
-
-#### Phase 2: Generate (`scripts/generate_chapter.py`)
-1. **Character sheets** — Generate missing sheets
-2. **Simplify text** — DeepSeek rewrites for children
-3. **Build prompts** — Template with single-scene enforcement
-4. **Generate illustrations** — Gemini 2.5 Flash Image with character sheet references + style fallback
-5. **Quality check** — Gemini Vision 5-dimension scoring
-6. **Special pages** — Covers, chapter pages, endings
-7. **PDF export** — ReportLab 8.5x8.5" square format
-
-#### Quality Check (5 Dimensions)
 1. **Character Consistency** — Do characters match their reference sheets?
 2. **Spelling** — Are embedded text words spelled correctly?
 3. **Duplicate Characters** — Is any character drawn twice?
 4. **Name-Face Mismatch** — Do name labels point to the right person?
 5. **Character Count** — Are all expected characters present?
 
-### Key Design Decisions
+### Other Pages
 
-- **LLM-first analysis**: Character ID, aliases, annotation all by LLM. No spaCy dependency.
-- **TextTiling for segmentation**: Algorithmic segmentation is more stable than LLM splitting.
-- **Preprocess once, generate many**: Full analysis cached to disk, chapters generated on demand.
-- **Single scene per page**: Prompt enforces one moment in time, no multi-panel layouts.
-- **Fuzzy character matching**: Name parts (length > 3) match across sheets and scene characters.
-- **Style consistency fallback**: When few character sheets match, others used as style references.
-- **Auto-fix feedback loop**: Quality check → AI Chat → fix prompts → regenerate.
-- **Dual LLM**: DeepSeek for text (cheap), Gemini for images (hackathon requirement).
+- **Home** (`/`) — Upload books, browse library
+- **Book Reader** (`/book/{bookId}`) — Full-screen page-flip reading with thumbnails
 
-## Tech Stack
+## Pipeline
 
-| Component | Technology |
-|-----------|-----------|
-| Text Analysis | DeepSeek (switchable to Gemini) |
-| Text Segmentation | TextTiling algorithm |
-| Text Simplification | DeepSeek |
-| Image Generation | Gemini 2.5 Flash Image |
-| Character Sheets | Gemini 2.5 Flash Image |
-| Quality Check | Gemini Vision |
-| AI Chat Assistant | DeepSeek |
-| PDF Export | ReportLab |
-| Data Storage | JSON files + MongoDB (optional) |
-| Backend | FastAPI + uvicorn |
-| Frontend | Next.js 15 + Tailwind CSS |
-| Agent Orchestrator | Gemini Function Calling |
-
-## Project Structure
-
-```
-src/
-├── app.py                      # FastAPI app setup + router mounting
-├── routes/
-│   ├── books.py                # Book management endpoints (12)
-│   ├── editor.py               # Editor/segment endpoints (8)
-│   ├── generation.py           # Generation & quality endpoints (7)
-│   └── helpers.py              # Shared utilities (_load_json, _save_json)
-├── llm_client.py               # Unified LLM client (DeepSeek/Gemini)
-├── config.py                   # Models, styles, API keys
-├── analysis/
-│   ├── chapter_split.py        # TextTiling segmentation
-│   ├── character_extract.py    # spaCy NER character extraction
-│   ├── character_persona.py    # Character persona analysis
-│   ├── coreference.py          # Coreference utilities
-│   ├── sentiment_curve.py      # Sentiment analysis
-│   ├── key_events.py           # Key event detection
-│   ├── complexity.py           # Text complexity analysis
-│   └── visual_score.py         # Visual scoring
-├── generation/
-│   ├── character_sheet.py      # Character reference sheet generation
-│   ├── illustration.py         # Page illustration generation
-│   ├── gemini_consistency_check.py  # Gemini Vision quality check
-│   ├── consistency_check.py    # CLIP-based consistency (optional)
-│   └── special_pages.py        # Cover, chapter, ending pages
-├── agent/
-│   ├── gemini_client.py        # Gemini API wrapper
-│   ├── text_simplifier.py      # LLM text rewriting
-│   ├── illustration_prompter.py # Prompt generation
-│   └── scene_selector.py       # NLP scene scoring
-├── agent_orchestrator.py       # Gemini Function Calling agent
-├── mcp_server.py               # 17 MCP tools for the agent
-├── qa/                         # Quality assurance modules
-├── renderer/
-│   ├── pdf_export.py           # PDF generation
-│   ├── layout_engine.py        # Page layout
-│   └── text_overlay.py         # Text rendering
-├── pipeline.py                 # MongoDB integration + status
-├── models.py                   # Pydantic data models
-├── db.py                       # Database utilities
-├── state_store.py              # State management
-└── step_logger.py              # Pipeline step logging
-
-scripts/
-├── preprocess_book.py          # 6-layer preprocess pipeline
-├── generate_chapter.py         # Chapter generation + quality check + PDF
-├── check_and_fix.py            # QA verification + regeneration
-├── run_pipeline.py             # End-to-end pipeline runner
-└── resolve_names.py            # Coreference resolution utility
-
-frontend/src/
-├── app/
-│   ├── page.tsx                # Home: upload + library
-│   ├── editor/[bookId]/page.tsx # Interactive page editor
-│   └── book/[bookId]/page.tsx  # Book reader (page-flip)
-├── components/
-│   ├── BookLibrary.tsx         # Library listing
-│   ├── UploadForm.tsx          # File upload
-│   ├── GenerationProgress.tsx  # Progress tracking
-│   └── editor/                 # Editor sub-components
-├── lib/api.ts                  # API client (30+ endpoints)
-└── types/index.ts              # TypeScript definitions
-```
-
-## Usage
-
-### Quick Start
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-cd frontend && npm install && cd ..
-
-# Set up environment
-cp .env.example .env
-# Edit .env: add GEMINI_API_KEY and optionally DEEPSEEK_API_KEY
-
-# Start backend
-python -m uvicorn src.app:app --port 8000
-
-# Start frontend (in another terminal)
-cd frontend && npm run dev
-
-# Open http://localhost:3000
-```
-
-### CLI: Preprocess a book
+### Phase 1: Preprocess (once per book)
 
 ```bash
 python scripts/preprocess_book.py --input data/sample_books/a_tale_of_two_cities.txt
 ```
 
-### CLI: Generate a chapter
+| Layer | What happens | Output |
+|-------|-------------|--------|
+| 1 | Extract text, split into chapters | `chapters.json`, `meta.json` |
+| 2 | LLM identifies characters, aliases, gender, appearance | `llm_characters.json`, `alias_map.json` |
+| 3 | Generate character reference sheets (Gemini Image) | `characters/*.png` |
+| 4 | Replace aliases with canonical names in text | `cleaned_chapters.json` |
+| 5 | TextTiling segmentation into scenes | `segments_raw.json` |
+| 6 | LLM annotates each segment: characters, actions, background, sentiment | `analysis.json` |
+
+### Phase 2: Generate (per chapter, on demand)
 
 ```bash
-# Generate chapter 0
 python scripts/generate_chapter.py --book A_TALE_OF_TWO_CITIES --chapter 0
-
-# Generate multiple chapters
-python scripts/generate_chapter.py --book A_TALE_OF_TWO_CITIES --chapter 0,4
-
-# Generate specific pages only
-python scripts/generate_chapter.py --book A_TALE_OF_TWO_CITIES --chapter 4 --pages 1,2,3
 ```
+
+| Step | What happens | Tool |
+|------|-------------|------|
+| 1 | Generate missing character sheets | Gemini Image |
+| 2 | Simplify text for children | DeepSeek |
+| 3 | Build illustration prompts (single scene enforced) | Template |
+| 4 | Generate page illustrations with character sheet references | Gemini 2.5 Flash Image |
+| 5 | Quality check each page (5 dimensions) | Gemini Vision |
+| 6 | Generate special pages (covers, chapter pages) | Gemini Image |
+| 7 | Export PDF (8.5 x 8.5" square format) | ReportLab |
+
+## API Endpoints (27 total)
+
+### Book Management (12)
+```
+GET    /api/health
+POST   /api/generate                          # Create from text
+POST   /api/generate/upload                   # Create from file
+GET    /api/books                             # List all
+GET    /api/books/preprocessed                # List preprocessed
+GET    /api/book/{id}                         # Get details
+DELETE /api/book/{id}                         # Delete
+GET    /api/book/{id}/html                    # HTML version
+GET    /api/book/{id}/pdf                     # PDF download
+GET    /api/book/{id}/preprocess/progress     # Preprocess progress
+GET    /api/book/{id}/preprocess/chapters     # Chapter list
+GET    /api/book/{id}/preprocess/characters   # Character list + sheets
+```
+
+### Editor (8)
+```
+GET    /api/book/{id}/preprocess/chapter/{ch}/segments   # Segments
+PUT    /api/book/{id}/segment/{seg}                      # Update fields
+GET    /api/book/{id}/segment/{seg}/history               # Version history
+POST   /api/book/{id}/segment/{seg}/simplify              # Generate simplified text
+POST   /api/book/{id}/segment/{seg}/background            # Generate background
+POST   /api/book/{id}/segment/{seg}/summarize             # Generate summary
+POST   /api/book/{id}/segment/{seg}/chat                  # AI chat
+```
+
+### Generation & Quality (7)
+```
+POST   /api/book/{id}/segment/{seg}/regenerate            # Regenerate illustration
+POST   /api/book/{id}/chapter/{ch}/generate               # Generate chapter
+GET    /api/book/{id}/chapter/{ch}/progress                # Generation progress
+GET    /api/book/{id}/segment/{seg}/quality                # Cached quality result
+POST   /api/book/{id}/segment/{seg}/quality                # Run quality check
+GET/POST /api/book/{id}/chapter/{ch}/consistency           # Chapter consistency
+POST   /api/book/{id}/characters/{name}/regenerate         # Regenerate character sheet
+```
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|-----------|
+| Text analysis & simplification | DeepSeek |
+| Image generation | Gemini 2.5 Flash Image |
+| Quality check | Gemini Vision |
+| AI Chat assistant | DeepSeek |
+| Text segmentation | TextTiling algorithm |
+| PDF export | ReportLab |
+| Backend | FastAPI + uvicorn |
+| Frontend | Next.js 15 + Tailwind CSS |
+| Database | JSON files + MongoDB (sync) |
+| Agent orchestrator | Gemini Function Calling + 17 MCP tools |
+
+## Project Structure
+
+```
+picture_book_generator/
+├── src/                            # Python core library
+│   ├── app.py                      # FastAPI setup + router mounting
+│   ├── config.py                   # API keys, models, styles
+│   ├── llm_client.py               # Unified LLM client (DeepSeek/Gemini)
+│   │
+│   ├── core/                       # Foundation utilities
+│   │   ├── db.py                   # MongoDB data layer (5 collections)
+│   │   ├── models.py               # Pydantic data models
+│   │   ├── pipeline.py             # Book lifecycle + status management
+│   │   ├── state_store.py          # Key-value state for agent
+│   │   └── step_logger.py          # Pipeline step logging
+│   │
+│   ├── routes/                     # API endpoints (27 total)
+│   │   ├── books.py                # Book management (12 endpoints)
+│   │   ├── editor.py               # Editor & segments (8 endpoints)
+│   │   ├── generation.py           # Generation & quality (7 endpoints)
+│   │   └── helpers.py              # Shared JSON utilities
+│   │
+│   ├── agent/                      # AI agent layer
+│   │   ├── orchestrator.py         # Gemini Function Calling agent
+│   │   ├── mcp_server.py           # 17 MCP tools for agent
+│   │   ├── gemini_client.py        # Gemini API wrapper
+│   │   ├── text_simplifier.py      # LLM text rewriting for children
+│   │   └── illustration_prompter.py # LLM prompt generation
+│   │
+│   ├── extraction/                 # Text extraction
+│   │   ├── text_input.py           # TXT files
+│   │   ├── pdf_parser.py           # PDF files
+│   │   └── epub_parser.py          # EPUB files
+│   │
+│   ├── analysis/                   # Text analysis (NLP)
+│   │   ├── chapter_split.py        # TextTiling segmentation
+│   │   ├── complexity.py           # Reading level assessment
+│   │   ├── key_events.py           # Key event extraction
+│   │   └── visual_score.py         # Visual concreteness scoring
+│   │
+│   ├── generation/                 # Image generation
+│   │   ├── image_utils.py          # Shared Gemini client + image loading
+│   │   ├── illustration.py         # Page illustration generation
+│   │   ├── character_sheet.py      # Character reference sheet generation
+│   │   ├── gemini_consistency_check.py  # 5-dimension quality check
+│   │   └── special_pages.py        # Covers, chapter pages, endings
+│   │
+│   ├── qa/                         # Quality assurance (agent tools)
+│   │   ├── safety_check.py         # Content safety
+│   │   ├── readability_check.py    # Reading level
+│   │   ├── coverage_check.py       # Story coverage
+│   │   └── hallucination_check.py  # Hallucination detection
+│   │
+│   └── renderer/
+│       └── pdf_export.py           # PDF generation (8.5x8.5")
+│
+├── scripts/                        # CLI entry points
+│   ├── preprocess_book.py          # 6-layer preprocess pipeline
+│   └── generate_chapter.py         # Chapter generation + quality + PDF
+│
+├── frontend/src/                   # Next.js frontend
+│   ├── app/
+│   │   ├── page.tsx                # Home: upload + library
+│   │   ├── editor/[bookId]/page.tsx # Interactive editor
+│   │   └── book/[bookId]/page.tsx  # Book reader (page-flip)
+│   ├── components/
+│   │   ├── editor/                 # Editor sub-components
+│   │   │   ├── IllustrationPanel.tsx
+│   │   │   ├── QualityCheckPanel.tsx
+│   │   │   ├── CharacterSheetsPanel.tsx
+│   │   │   ├── AIChatPanel.tsx
+│   │   │   └── VersionsCarousel.tsx
+│   │   ├── BookLibrary.tsx
+│   │   ├── UploadForm.tsx
+│   │   └── GenerationProgress.tsx
+│   ├── lib/api.ts                  # API client (27 endpoints)
+│   └── types/index.ts              # TypeScript definitions
+│
+└── data/                           # Generated output (not in git)
+    ├── sample_books/               # Input books (.txt)
+    └── generated/{book_id}/
+        ├── preprocess/             # 6 layers of cached analysis
+        ├── characters/             # Character sheet images
+        ├── chapters/ch{N}/
+        │   ├── pages/              # Page illustrations
+        │   ├── quality/            # Cached quality results
+        │   └── history/            # Previous illustration versions
+        ├── special/                # Cover + special page images
+        └── book.pdf                # Final combined PDF
+```
+
+## Key Design Decisions
+
+- **LLM-first analysis** — Character identification, alias resolution, scene annotation all done by LLM (DeepSeek). No spaCy dependency for character work.
+- **TextTiling for segmentation** — Algorithmic segmentation is more stable/deterministic than LLM splitting. LLM only annotates, doesn't split.
+- **Preprocess once, generate many** — Full book analysis runs once and caches to disk. Chapter generation loads from cache.
+- **Single scene per page** — Prompt enforces one moment in time. No multi-panel layouts.
+- **Style consistency** — When few character sheets match a scene, other sheets used as style references to prevent drift.
+- **Auto-fix feedback loop** — Quality check → AI Chat → fix prompts → regenerate. Fully automated.
+- **Dual LLM** — DeepSeek for text tasks (cheap), Gemini for image generation (hackathon requirement). Switchable via `TEXT_LLM` env var.
+- **MongoDB sync** — All edits sync to MongoDB (best-effort). JSON files are the primary data store.
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| GEMINI_API_KEY | (required) | Google Gemini API key |
-| DEEPSEEK_API_KEY | (optional) | DeepSeek API key (cheaper text tasks) |
-| TEXT_LLM | "deepseek" | Text LLM provider: "deepseek" or "gemini" |
-| MONGODB_URI | mongodb://localhost:27017 | MongoDB connection string |
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GEMINI_API_KEY` | Yes | Google Gemini API key (images + vision) |
+| `DEEPSEEK_API_KEY` | No | DeepSeek API key (cheaper text tasks) |
+| `TEXT_LLM` | No | `"deepseek"` (default) or `"gemini"` |
+| `MONGODB_URI` | No | MongoDB connection string |
+| `MONGODB_DB` | No | Database name (default: `picture_book_generator`) |
 
-## Sample Books
+## MongoDB Collections
 
-- A Tale of Two Cities (Charles Dickens) — primary demo, 45 chapters
-- The Great Gatsby (F. Scott Fitzgerald)
-- Frankenstein (Mary Shelley)
-- Pride and Prejudice (Jane Austen)
-- Don Quixote (Cervantes)
-- The Odyssey (Homer)
-- The Prince (Machiavelli)
+| Collection | Contents |
+|------------|----------|
+| `books` | Book metadata (title, chapters, status) |
+| `characters` | Character profiles (name, aliases, gender, appearance, sheet path) |
+| `segments` | All segments (text, characters, actions, background, sentiment) |
+| `illustrations` | Generation records (segment, prompt, image path, version) |
+| `generation_log` | LLM call logs (model, input/output, tokens, duration) |
