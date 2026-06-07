@@ -78,6 +78,47 @@ Return JSON: {{"characters": [{{...}}]}}""")
     return result.get("characters", [])
 
 
+def _llm_identify_locations(title: str, chapters: list[dict]) -> list[dict]:
+    """LLM identifies key recurring locations/settings from the novel."""
+    from src.llm_client import generate_json
+
+    chapter_text = "\n\n".join(
+        f"[{ch.get('title', f'Chapter {i+1}')}]\n{ch.get('text', '')[:2000]}"
+        for i, ch in enumerate(chapters)
+    )
+
+    result = generate_json(f"""Analyze the novel "{title}" and list the KEY RECURRING LOCATIONS where important scenes happen.
+
+Text (excerpts):
+{chapter_text}
+
+Only list locations that appear in MULTIPLE chapters or are central to the story. NOT every room or street — only the most important 5-15 locations.
+
+For each location provide:
+- name: Short recognizable name (e.g. "Defarge Wine Shop", "The Bastille", "Tellson's Bank")
+- aliases: Other ways this location is referred to
+- description: One sentence about what this place is
+- visual_details: Structured visual breakdown:
+  - setting: indoor/outdoor/both
+  - time_period: historical era (e.g. "1780s France", "1780s England")
+  - architecture: building style (e.g. "narrow stone staircase", "grand courtroom")
+  - lighting: typical lighting (e.g. "dim candlelight", "bright daylight", "gloomy")
+  - atmosphere: mood/feeling (e.g. "oppressive", "bustling", "eerie")
+  - key_objects: notable objects always present (e.g. "wine barrels", "workbench", "guillotine")
+  - colors: dominant color palette (e.g. "grey stone, dark wood", "red and gold")
+- chapters_appeared: list of chapter numbers where this location appears (0-indexed)
+- importance: "major" or "minor"
+
+Rules:
+- Focus on PHYSICAL locations, not abstract concepts
+- Merge duplicates (e.g. "the wine shop" and "Defarge's shop" are the same)
+- Include both French and English locations if the story spans countries
+
+Return JSON: {{"locations": [{{...}}]}}""")
+
+    return result.get("locations", [])
+
+
 # ═══════════════════════════════════════════════════════════════
 # Layer 4: Alias replacement
 # ═══════════════════════════════════════════════════════════════
@@ -298,8 +339,10 @@ def _layer1_extract_text(input_path, book_id, preprocess_dir):
 
 
 def _layer2_identify_characters(book_id, preprocess_dir, chapters, title):
-    """Layer 2: LLM character identification."""
+    """Layer 2: LLM character identification + location identification."""
     provider = "DeepSeek" if os.getenv("TEXT_LLM", "deepseek") == "deepseek" else "Gemini"
+
+    # Characters
     print(f"\n[Layer 2/6] LLM character identification ({provider})...")
     t0 = time.time()
     characters = _llm_identify_characters(title, chapters)
@@ -307,8 +350,16 @@ def _layer2_identify_characters(book_id, preprocess_dir, chapters, title):
     for c in characters:
         aliases = ", ".join(c.get("aliases", [])[:3])
         print(f"    {c['canonical_name']} ({c['gender']}, {c['role']}) [{aliases}]")
-
     _save(preprocess_dir, "llm_characters", {"characters": characters})
+
+    # Locations
+    print(f"  Identifying key locations...")
+    t1 = time.time()
+    locations = _llm_identify_locations(title, chapters)
+    print(f"  {len(locations)} locations in {time.time() - t1:.1f}s:")
+    for loc in locations:
+        print(f"    {loc['name']} ({loc.get('importance', '?')})")
+    _save(preprocess_dir, "llm_locations", {"locations": locations})
 
     return characters
 

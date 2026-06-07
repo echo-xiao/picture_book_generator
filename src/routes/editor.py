@@ -122,6 +122,30 @@ async def update_character(book_id: str, char_name: str, update: CharacterUpdate
     return {"status": "updated", "character": char_name, "updated_fields": list(update_dict.keys())}
 
 
+@router.get("/api/book/{book_id}/preprocess/locations")
+async def get_locations(book_id: str) -> dict[str, Any]:
+    """Get location list with scene reference images."""
+    llm_locs = _load_json(book_id, "llm_locations.json")
+    locations = llm_locs.get("locations", []) if llm_locs else []
+
+    # Find scene reference images
+    scenes_dir = GENERATED_DIR / book_id / "scenes"
+    scene_sheets = {}
+    if scenes_dir.exists():
+        import re as _re
+        for loc in locations:
+            name = loc.get("name", "")
+            safe = _re.sub(r'[^\w\s\u4e00-\u9fff-]', '', name)
+            safe = _re.sub(r'\s+', '_', safe.strip()).lower()[:50]
+            for ext in (".png", ".jpg"):
+                scene_file = scenes_dir / f"{safe}_scene{ext}"
+                if scene_file.exists():
+                    scene_sheets[name] = f"/static/{book_id}/scenes/{scene_file.name}"
+                    break
+
+    return {"locations": locations, "scene_sheets": scene_sheets}
+
+
 @router.get("/api/book/{book_id}/preprocess/characters/{char_name}/history")
 async def get_character_sheet_history(book_id: str, char_name: str) -> dict[str, Any]:
     """Get current + historical character sheet images."""

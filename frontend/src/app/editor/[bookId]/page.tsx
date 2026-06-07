@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
-import { RefreshCw, Save, Users, MapPin, Smile, BookOpen } from "lucide-react";
+import { RefreshCw, Save, Users, MapPin, Smile, BookOpen, Image } from "lucide-react";
 import {
   getChapters,
   getCharacters,
@@ -28,6 +28,7 @@ import CharacterSheetsPanel from "@/components/editor/CharacterSheetsPanel";
 import AIChatPanel from "@/components/editor/AIChatPanel";
 import VersionsCarousel from "@/components/editor/VersionsCarousel";
 import CharacterManagement from "@/components/editor/CharacterManagement";
+import SceneManagement from "@/components/editor/SceneManagement";
 
 const SENTIMENTS = ["positive", "negative", "neutral", "tense", "emotional"];
 
@@ -48,7 +49,7 @@ export default function EditorPage() {
     return sp.get("seg") ? +sp.get("seg")! : null;
   });
 
-  const [activeTab, setActiveTab] = useState<"editor" | "characters">("editor");
+  const [activeTab, setActiveTab] = useState<"editor" | "characters" | "scenes">("editor");
   const [navigateToChar, setNavigateToChar] = useState<string | null>(null);
   const [chapters, setChapters] = useState<Record<string, ChapterInfo>>({});
   const [meta, setMeta] = useState<{ title?: string }>({});
@@ -534,6 +535,14 @@ export default function EditorPage() {
               <Users size={12} /> Characters
             </button>
             <button
+              onClick={() => setActiveTab("scenes")}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors flex items-center gap-1 ${
+                activeTab === "scenes" ? "bg-white shadow-sm text-coral" : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              <MapPin size={12} /> Scenes
+            </button>
+            <button
               onClick={() => setActiveTab("editor")}
               className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors flex items-center gap-1 ${
                 activeTab === "editor" ? "bg-white shadow-sm text-coral" : "text-gray-500 hover:text-gray-700"
@@ -565,6 +574,11 @@ export default function EditorPage() {
             setNavigateToChar(null);
           }}
         />
+      )}
+
+      {/* Scenes Tab */}
+      {activeTab === "scenes" && (
+        <SceneManagement bookId={bookId} />
       )}
 
       {/* Editor Tab */}

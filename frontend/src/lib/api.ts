@@ -91,6 +91,11 @@ export async function getCharacters(bookId: string) {
   return data;
 }
 
+export async function getLocations(bookId: string) {
+  const { data } = await api.get(`/book/${bookId}/preprocess/locations`);
+  return data as { locations: any[]; scene_sheets: Record<string, string> };
+}
+
 export async function getCharacterSheetHistory(bookId: string, charName: string) {
   const { data } = await api.get(`/book/${bookId}/preprocess/characters/${encodeURIComponent(charName)}/history`);
   return data as { images: Array<{ url: string; version: string; timestamp: number }> };
