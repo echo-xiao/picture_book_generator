@@ -803,14 +803,9 @@ async def regenerate_segment_illustration(
             [page_prompt], character_sheets, book_id,
             pages_dir=str(ch_dir),
         )
+        logger.info("Regeneration complete for segment %d (page %d)", seg_id, page_num)
 
-    # Run in separate process to not block uvicorn
-    import subprocess
-    subprocess.Popen(
-        ["python", "scripts/generate_chapter.py", "--book", book_id,
-         "--chapter", str(ch_idx), "--pages", str(page_num)],
-        cwd=str(Path(__file__).parent.parent),
-    )
+    background_tasks.add_task(_regen)
     return {"status": "regenerating", "segment_id": seg_id, "page_number": page_num}
 
 
