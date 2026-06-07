@@ -1,4 +1,4 @@
-import { RefreshCw, Image, BookOpen } from "lucide-react";
+import { Image, BookOpen } from "lucide-react";
 import type { Segment } from "@/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -6,30 +6,18 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 interface IllustrationPanelProps {
   selectedSegment: Segment;
   regenerating: boolean;
-  onRegenerate: () => void;
 }
 
 export default function IllustrationPanel({
   selectedSegment,
   regenerating,
-  onRegenerate,
 }: IllustrationPanelProps) {
   return (
     <div className="w-[40%] shrink-0 overflow-y-auto p-3 border-r border-peach/20">
       <div className="card !p-3 mb-3">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="font-display font-bold text-gray-700 text-sm flex items-center gap-1">
-            <Image size={14} /> Illustration
-          </h3>
-          <button
-            onClick={onRegenerate}
-            disabled={regenerating}
-            className="btn-primary text-[10px] !px-2 !py-1 flex items-center gap-1"
-          >
-            <RefreshCw size={10} className={regenerating ? "animate-spin" : ""} />
-            {regenerating ? "Generating..." : "Regenerate"}
-          </button>
-        </div>
+        <h3 className="font-display font-bold text-gray-700 text-sm flex items-center gap-1 mb-2">
+          <Image size={14} /> Illustration
+        </h3>
         {regenerating ? (
           <div className="w-full aspect-square bg-peach/10 rounded-xl flex flex-col items-center justify-center gap-3">
             <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-coral" />
@@ -46,12 +34,12 @@ export default function IllustrationPanel({
         ) : (
           <div className="w-full aspect-square bg-peach/20 rounded-xl flex flex-col items-center justify-center text-gray-400 gap-2">
             <Image size={24} />
-            <p className="text-xs">Click "Regenerate" to create</p>
+            <p className="text-xs">Edit prompts below, then click Save & Regen</p>
           </div>
         )}
       </div>
 
-      {/* Original Text (under illustration, full content) */}
+      {/* Original Text */}
       <div className="card !p-3 mb-3">
         <h3 className="font-display font-bold text-gray-700 mb-2 text-xs flex items-center gap-1">
           <BookOpen size={12} /> Original Text

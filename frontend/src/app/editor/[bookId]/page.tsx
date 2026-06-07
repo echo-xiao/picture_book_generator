@@ -631,7 +631,6 @@ export default function EditorPage() {
               <IllustrationPanel
                 selectedSegment={selectedSegment}
                 regenerating={regenerating}
-                onRegenerate={handleRegenerate}
               />
 
               {/* Col 2: Prompt Editing */}
@@ -786,23 +785,23 @@ export default function EditorPage() {
                   onSend={handleChatSend}
                 />
 
-                {/* Save Buttons */}
+                {/* Action Buttons */}
                 <div className="flex gap-2">
                   <button
                     onClick={handleSave}
-                    disabled={saving}
-                    className="btn-primary text-xs !px-3 !py-1.5 flex items-center gap-1"
+                    disabled={saving || regenerating}
+                    className="btn-secondary text-xs !px-3 !py-1.5 flex items-center gap-1"
                   >
                     <Save size={12} />
-                    {saving ? "..." : "Save"}
+                    {saving ? "Saving..." : "Save"}
                   </button>
                   <button
                     onClick={handleRegenerate}
-                    disabled={regenerating}
-                    className="btn-secondary text-xs !px-3 !py-1.5 flex items-center gap-1"
+                    disabled={regenerating || saving}
+                    className="btn-primary text-xs !px-3 !py-1.5 flex items-center gap-1"
                   >
                     <RefreshCw size={12} className={regenerating ? "animate-spin" : ""} />
-                    {regenerating ? "..." : "Save & Regen"}
+                    {regenerating ? "Generating..." : "Save & Regen"}
                   </button>
                 </div>
               </div>
