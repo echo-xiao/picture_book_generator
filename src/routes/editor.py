@@ -34,27 +34,38 @@ async def get_characters(book_id: str) -> dict[str, Any]:
     genders = _load_json(book_id, "character_genders.json") or {}
     alias_map = _load_json(book_id, "alias_map.json") or {}
 
-    # Find character sheet images — match by safe filename
+    # Find character sheet + portrait images
     import re as _re
     chars_dir = GENERATED_DIR / book_id / "characters"
     sheets = {}
+    portraits = {}
     if chars_dir.exists():
         sheet_files = {f.stem.replace("_sheet", ""): f for f in chars_dir.glob("*_sheet.*")}
-        # Match each character's canonical name to a sheet file
+        portrait_files = {f.stem.replace("_portrait", ""): f for f in chars_dir.glob("*_portrait.*")}
         all_chars = llm_chars.get("characters", []) if llm_chars else []
         for char in all_chars:
             name = char.get("canonical_name", "")
-            # Convert name to safe filename (same logic as character_sheet._safe_filename)
             safe = _re.sub(r'[^\w\s\u4e00-\u9fff-]', '', name)
             safe = _re.sub(r'\s+', '_', safe.strip()).lower()[:50]
             if safe in sheet_files:
                 sheets[name] = f"/static/{book_id}/characters/{sheet_files[safe].name}"
+            if safe in portrait_files:
+                portraits[name] = f"/static/{book_id}/characters/{portrait_files[safe].name}"
+            elif safe in sheet_files:
+                # Auto-crop portrait from sheet
+                from src.generation.character_sheet import crop_portrait_from_sheet
+                sheet_file = sheet_files[safe]
+                portrait_out = chars_dir / f"{safe}_portrait.png"
+                result = crop_portrait_from_sheet(str(sheet_file), str(portrait_out))
+                if result:
+                    portraits[name] = f"/static/{book_id}/characters/{portrait_out.name}"
 
     return {
         "characters": llm_chars.get("characters", []) if llm_chars else [],
         "genders": genders,
         "alias_map": alias_map,
         "sheets": sheets,
+        "portraits": portraits,
     }
 
 

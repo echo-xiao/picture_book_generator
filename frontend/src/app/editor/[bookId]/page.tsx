@@ -53,6 +53,7 @@ export default function EditorPage() {
   const [meta, setMeta] = useState<{ title?: string }>({});
   const [characters, setCharacters] = useState<CharacterInfo[]>([]);
   const [sheets, setSheets] = useState<Record<string, string>>({});
+  const [portraits, setPortraits] = useState<Record<string, string>>({});
   const [aliasMap, setAliasMap] = useState<Record<string, string>>({});
   const [selectedChapter, setSelectedChapter] = useState<number | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
@@ -112,6 +113,7 @@ export default function EditorPage() {
           // Reload character sheets
           const charData = await getCharacters(bookId);
           setSheets(charData.sheets || {});
+          setPortraits(charData.portraits || {});
         }
       } catch (e) {
         console.error("Progress poll failed:", e);
@@ -136,6 +138,7 @@ export default function EditorPage() {
           setMeta(chapData.meta || {});
           setCharacters(charData.characters || []);
           setSheets(charData.sheets || {});
+          setPortraits(charData.portraits || {});
           setAliasMap(charData.alias_map || {});
 
           const sortedKeys = chapKeys.sort((a, b) => +a - +b);
@@ -852,6 +855,7 @@ export default function EditorPage() {
                   selectedSegment={selectedSegment}
                   characters={characters}
                   sheets={sheets}
+                  portraits={portraits}
                   bookId={bookId}
                   onRegenerateSheet={handleRegenerateSheet}
                 />

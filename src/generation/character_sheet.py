@@ -251,11 +251,104 @@ def _add_labels_to_sheet(image_path: str, name: str, profile: dict) -> str:
         return image_path
 
 
+def crop_portrait_from_sheet(sheet_path: str, output_path: str) -> str:
+    """Crop the FRONT view (top-left area) from a character sheet as portrait."""
+    try:
+        from PIL import Image
+        img = Image.open(sheet_path)
+        w, h = img.size
+        # FRONT view is top-left 1/3 width, top 35% height
+        crop = img.crop((0, 0, w // 3, int(h * 0.35)))
+        # Make it square
+        cw, ch = crop.size
+        size = max(cw, ch)
+        square = Image.new("RGBA" if img.mode == "RGBA" else "RGB", (size, size), (255, 255, 255))
+        square.paste(crop, ((size - cw) // 2, (size - ch) // 2))
+        square.save(output_path, quality=95)
+        return output_path
+    except Exception as e:
+        logger.warning("Failed to crop portrait from %s: %s", sheet_path, e)
+        return ""
+
+
 def _safe_filename(name: str) -> str:
     """Convert a character name to a safe filename."""
     safe = re.sub(r'[^\w\s\u4e00-\u9fff-]', '', name)
     safe = re.sub(r'\s+', '_', safe.strip()).lower()
     return safe[:50] or "character"
+
+
+def _generate_portrait(client, profile: dict, output_dir: Path, style: str) -> str:
+    """Generate a simple front-facing portrait (head + upper body).
+
+    This is generated FIRST, then used as reference for the full character sheet.
+    Returns the path to the saved portrait image.
+    """
+    name = profile.get("name", "Character")
+    safe_name = _safe_filename(name)
+    portrait_path = output_dir / f"{safe_name}_portrait"
+
+    # Check if portrait already exists
+    for ext in (".png", ".jpg"):
+        if portrait_path.with_suffix(ext).exists():
+            logger.info("Portrait for '%s' already exists, skipping", name)
+            return str(portrait_path.with_suffix(ext))
+
+    gender = profile.get("gender", "unknown")
+    visual_identity = profile.get("visual_identity", "")
+    appearance = profile.get("appearance_description", [])
+    if isinstance(appearance, str):
+        appearance = [appearance]
+    book_desc = "\n".join(f"  - {s}" for s in appearance[:3]) if appearance else "Design a friendly, memorable character."
+
+    prompt = f"""Children's picture book character portrait.
+
+Draw a SINGLE character: {name} ({gender}).
+Front-facing, head and upper body, centered in the image.
+Clean white background, no other characters or objects.
+
+APPEARANCE:
+{book_desc}
+
+{f"VISUAL IDENTITY: {visual_identity}" if visual_identity else ""}
+
+RULES:
+- ONLY this one character, nothing else.
+- Front-facing, looking at the viewer.
+- Friendly, expressive face with big eyes.
+- Show clothing/outfit details clearly.
+- Historical period-accurate clothing (NOT modern).
+- Clean, simple composition.
+- Do NOT add any text, labels, or names to the image.
+
+Style: {style}
+Do NOT include: {NEGATIVE_PROMPT}"""
+
+    for attempt in range(2):
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_IMAGE_MODEL,
+                contents=prompt,
+                config=genai.types.GenerateContentConfig(
+                    response_modalities=["TEXT", "IMAGE"],
+                    image_config=genai.types.ImageConfig(aspect_ratio="1:1"),
+                ),
+            )
+            if response.candidates:
+                for part in response.candidates[0].content.parts:
+                    if hasattr(part, "inline_data") and part.inline_data is not None:
+                        mime = part.inline_data.mime_type or "image/png"
+                        ext = ".jpg" if "jpeg" in mime or "jpg" in mime else ".png"
+                        final = portrait_path.with_suffix(ext)
+                        final.write_bytes(part.inline_data.data)
+                        logger.info("Portrait for '%s' saved to %s", name, final)
+                        return str(final)
+        except Exception as e:
+            logger.warning("Portrait attempt %d for '%s' failed: %s", attempt + 1, name, e)
+            if attempt == 0:
+                time.sleep(2)
+
+    return ""
 
 
 def generate_character_sheets(
@@ -264,132 +357,103 @@ def generate_character_sheets(
     style: str | None = None,
     max_characters: int = 0,
 ) -> list[dict]:
-    """Generate character reference sheets for ALL main/supporting characters.
+    """Generate character portraits + reference sheets.
 
-    Args:
-        character_profiles: Character profile dicts from NLP analysis.
-        book_id: Book identifier for file storage.
-        style: Optional style override.
-        max_characters: Max characters (0 = no limit, generate all main+supporting).
+    Two-step process:
+    1. Generate portrait (simple front-facing head shot) — used as avatar
+    2. Generate full character sheet (multi-angle, expressions) — used as reference for illustrations
 
-    Returns:
-        List of dicts with character_name, sheet_path, description, background, etc.
+    The portrait is passed as a visual reference to the sheet generation for consistency.
     """
     client = _get_client()
     active_style = style or DEFAULT_STYLE
     output_dir = GENERATED_DIR / book_id / "characters"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Filter to real characters: main/supporting with enough mentions
-    MIN_MENTIONS = 5  # Must appear at least 5 times to get a sheet
+    # Filter to real characters
+    MIN_MENTIONS = 5
     main_chars = [
         p for p in character_profiles
         if p.get("role") in ("main", "supporting")
         and p.get("mention_count", 0) >= MIN_MENTIONS
     ]
-
     if not main_chars:
-        # Fallback: top characters by mention count
         main_chars = sorted(character_profiles, key=lambda p: p.get("mention_count", 0), reverse=True)[:10]
-
     if max_characters > 0:
         main_chars = main_chars[:max_characters]
 
-    logger.info("Generating sheets for %d characters (filtered from %d profiles, min %d mentions)",
-                len(main_chars), len(character_profiles), MIN_MENTIONS)
-
+    logger.info("Generating portraits + sheets for %d characters", len(main_chars))
     if not main_chars:
-        logger.warning("No character profiles provided for sheet generation")
         return []
 
-    # Assign distinct visual identities
     main_chars = _assign_visual_identities(main_chars)
-
     results: list[dict] = []
 
     for profile in main_chars:
         name = profile.get("name", "Character")
         safe_name = _safe_filename(name)
+
+        # Step 1: Generate portrait
+        portrait_path = _generate_portrait(client, profile, output_dir, active_style)
+
+        # Step 2: Generate full sheet (with portrait as reference)
         save_path = output_dir / f"{safe_name}_sheet"
+        sheet_path = ""
 
-        prompt = _build_sheet_prompt(profile, active_style, all_profiles=main_chars)
-        logger.info("Generating character sheet for '%s'...", name)
+        # Check if sheet already exists
+        for ext in (".png", ".jpg"):
+            if save_path.with_suffix(ext).exists():
+                sheet_path = str(save_path.with_suffix(ext))
+                break
 
-        success = False
-        description = ""
+        if not sheet_path:
+            prompt = _build_sheet_prompt(profile, active_style, all_profiles=main_chars)
 
-        for attempt in range(2):
-            try:
-                response = client.models.generate_content(
-                    model=GEMINI_IMAGE_MODEL,
-                    contents=prompt,
-                    config=genai.types.GenerateContentConfig(
-                        response_modalities=["TEXT", "IMAGE"],
-                        image_config=genai.types.ImageConfig(
-                            aspect_ratio="1:1",
+            # Build content with portrait as reference
+            import base64
+            contents: list = []
+            if portrait_path:
+                try:
+                    img_data = Path(portrait_path).read_bytes()
+                    mime = "image/png" if portrait_path.endswith(".png") else "image/jpeg"
+                    contents.append({"text": f"[REFERENCE PORTRAIT of {name}] — Match this character's face, hair, outfit EXACTLY in all views below."})
+                    contents.append({"inline_data": {"mime_type": mime, "data": base64.b64encode(img_data).decode()}})
+                except Exception:
+                    pass
+            contents.append({"text": prompt})
+
+            for attempt in range(2):
+                try:
+                    response = client.models.generate_content(
+                        model=GEMINI_IMAGE_MODEL,
+                        contents=contents,
+                        config=genai.types.GenerateContentConfig(
+                            response_modalities=["TEXT", "IMAGE"],
+                            image_config=genai.types.ImageConfig(aspect_ratio="1:1"),
                         ),
-                    ),
-                )
-
-                if not response.candidates:
-                    logger.warning("No candidates for '%s' attempt %d", name, attempt + 1)
-                    continue
-
-                for part in response.candidates[0].content.parts:
-                    if hasattr(part, "text") and part.text:
-                        description += part.text
-                    if hasattr(part, "inline_data") and part.inline_data is not None:
-                        mime = part.inline_data.mime_type or "image/png"
-                        ext = ".jpg" if "jpeg" in mime or "jpg" in mime else ".png"
-                        final_path = save_path.with_suffix(ext)
-                        final_path.write_bytes(part.inline_data.data)
-                        logger.info("Character sheet for '%s' saved to %s", name, final_path)
-                        success = True
+                    )
+                    if response.candidates:
+                        for part in response.candidates[0].content.parts:
+                            if hasattr(part, "inline_data") and part.inline_data is not None:
+                                mime = part.inline_data.mime_type or "image/png"
+                                ext = ".jpg" if "jpeg" in mime or "jpg" in mime else ".png"
+                                final = save_path.with_suffix(ext)
+                                final.write_bytes(part.inline_data.data)
+                                sheet_path = str(final)
+                                break
+                    if sheet_path:
                         break
+                except Exception as e:
+                    logger.warning("Sheet attempt %d for '%s' failed: %s", attempt + 1, name, e)
+                    if attempt == 0:
+                        time.sleep(2)
 
-                if success:
-                    break
-
-            except Exception as e:
-                logger.warning("Character sheet attempt %d for '%s' failed: %s", attempt + 1, name, e)
-                if attempt == 0:
-                    time.sleep(2)
-
-        # Resolve actual path
-        actual_path = ""
-        if success:
-            for ext in (".png", ".jpg"):
-                candidate = save_path.with_suffix(ext)
-                if candidate.exists():
-                    actual_path = str(candidate)
-                    break
-
-        # Add labels with Pillow (name, views, emotions)
-        if actual_path:
-            actual_path = _add_labels_to_sheet(actual_path, name, profile)
-
-        # Build background from available profile data
         role = profile.get("role", "unknown")
-        traits = profile.get("personality_traits", [])
-        co_chars = profile.get("co_occurring_characters", {})
-        top_relations = sorted(co_chars.items(), key=lambda x: x[1], reverse=True)[:3] if co_chars else []
-        relations_str = ", ".join(f"{k} ({v} scenes together)" for k, v in top_relations)
-
-        background = (
-            f"{name} is a {role} character. "
-            f"Personality: {', '.join(traits[:4]) if traits else 'not specified'}. "
-            f"Often appears with: {relations_str or 'various characters'}."
-        )
-
         results.append({
             "character_name": name,
-            "sheet_path": actual_path,
-            "description": description or f"Character sheet for {name}",
-            "background": background,
+            "sheet_path": sheet_path,
+            "portrait_path": portrait_path,
             "role": role,
-            "prompt_used": prompt[:500],
-            "appearance": profile.get("appearance", []),
-            "traits": traits,
             "visual_identity": profile.get("visual_identity", ""),
             "visual_colors": profile.get("visual_colors", ""),
         })
