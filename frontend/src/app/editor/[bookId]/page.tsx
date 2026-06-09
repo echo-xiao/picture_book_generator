@@ -102,6 +102,8 @@ export default function EditorPage() {
   const [historyImages, setHistoryImages] = useState<Array<{ url: string; version: string; timestamp: number; quality?: any }>>([]);
   const [generatingChapter, setGeneratingChapter] = useState<number | null>(null);
   const [chapterProgress, setChapterProgress] = useState<{ progress: number; current_step: string } | null>(null);
+  const [genAllChapters, setGenAllChapters] = useState(false);
+  const genAllChaptersRef = useRef(false);
   const [qualityResult, setQualityResult] = useState<{
     overall_score: number;
     segment_id: number;
@@ -129,36 +131,64 @@ export default function EditorPage() {
     const interval = setInterval(async () => {
       try {
         const prog = await getChapterProgress(bookId, generatingChapter).catch(() => null);
-        if (!prog) return; // Skip this poll cycle on error
+        if (!prog) return;
         setChapterProgress(prog);
-        if (prog.status === "complete") {
+        if (prog.status === "complete" && !genAllChaptersRef.current) {
+          // Only auto-clear when NOT in Gen All mode (Gen All handles its own transitions)
           setGeneratingChapter(null);
           setChapterProgress(null);
-          // Reload segments
           if (selectedChapter === generatingChapter) {
             const data = await getChapterSegments(bookId, generatingChapter);
             setSegments(data.segments || []);
-            // Auto quality check for current segment
-            const currentSeg = data.segments?.find((s: Segment) => s.id === selectedSegId);
-            if (currentSeg?.illustration_url) {
-              setCheckingQuality(true);
-              checkSegmentQuality(bookId, currentSeg.id)
-                .then((result) => setQualityResult(result))
-                .catch((e) => console.error("Auto quality check failed:", e))
-                .finally(() => setCheckingQuality(false));
-            }
           }
-          // Reload character sheets
-          const charData = await getCharacters(bookId);
-          setSheets(charData.sheets || {});
-          setPortraits(charData.portraits || {});
         }
-      } catch (e) {
-        console.error("Progress poll failed:", e);
-      }
+      } catch {}
     }, 5000);
     return () => clearInterval(interval);
   }, [generatingChapter, bookId, selectedChapter]);
+
+  // Gen All Chapters: generate all chapters sequentially
+  const handleGenAllChapters = async () => {
+    const chapterIndices = Object.keys(chapters).map(Number).sort((a, b) => a - b);
+    setGenAllChapters(true);
+    genAllChaptersRef.current = true;
+
+    for (const chIdx of chapterIndices) {
+      if (!genAllChaptersRef.current) break; // allow cancel
+      setGeneratingChapter(chIdx);
+      try {
+        await generateChapter(bookId, chIdx);
+        // Wait for completion by polling progress
+        await new Promise<void>((resolve) => {
+          const poll = setInterval(async () => {
+            try {
+              const prog = await getChapterProgress(bookId, chIdx).catch(() => null);
+              if (!prog) return;
+              setChapterProgress(prog);
+              if (prog.status === "complete") {
+                clearInterval(poll);
+                resolve();
+              }
+            } catch {}
+          }, 5000);
+          setTimeout(() => { clearInterval(poll); resolve(); }, 600000); // 10 min timeout per chapter
+        });
+      } catch (e) {
+        console.error(`Gen chapter ${chIdx} failed:`, e);
+      }
+    }
+
+    setGeneratingChapter(null);
+    setChapterProgress(null);
+    setGenAllChapters(false);
+    genAllChaptersRef.current = false;
+
+    // Refresh character sheets (may have been generated)
+    try {
+      const charData = await getCharacters(bookId);
+      setSheets(charData.sheets || {});
+    } catch {}
+  };
 
   // Load chapters + characters on mount (retry until preprocess is done)
   useEffect(() => {
@@ -681,6 +711,24 @@ export default function EditorPage() {
       <div className="flex flex-1 overflow-hidden">
         {/* Left Panel: Chapters + Segments + Special Pages */}
         <div className="w-64 bg-white border-r border-peach/30 overflow-y-auto shrink-0">
+          {/* Gen All Chapters */}
+          <div className="px-3 py-2 text-[10px] font-bold text-gray-400 uppercase tracking-wider bg-cream/50 flex items-center justify-between">
+            <span>Chapters ({Object.keys(chapters).length})</span>
+            <div className="flex items-center gap-1">
+              {genAllChapters && (
+                <span className="text-[9px] text-amber-600 animate-pulse">
+                  Ch {(generatingChapter ?? 0) + 1}/{Object.keys(chapters).length}
+                </span>
+              )}
+              <button
+                onClick={handleGenAllChapters}
+                disabled={genAllChapters || generatingChapter !== null}
+                className="text-[9px] bg-coral/80 text-white px-2 py-0.5 rounded hover:bg-coral transition-colors disabled:opacity-50"
+              >
+                {genAllChapters ? "Running..." : "Gen All"}
+              </button>
+            </div>
+          </div>
           {/* Book Cover */}
           {(() => {
             const bc = specialPages.find(p => p.type === "book_cover");
@@ -703,7 +751,9 @@ export default function EditorPage() {
               <div key={chIdx}>
                 <div
                   className={`flex items-center border-b border-gray-100 transition-colors ${
-                    selectedChapter === +chIdx
+                    generatingChapter === +chIdx
+                      ? "bg-amber-50 border-l-2 border-l-amber-400"
+                      : selectedChapter === +chIdx
                       ? "bg-coral/10"
                       : "hover:bg-peach/30"
                   }`}
@@ -718,16 +768,16 @@ export default function EditorPage() {
                     <span className="truncate flex-1">{info.chapter_title}</span>
                     <span className="text-[10px] text-gray-400 shrink-0 ml-1">{info.num_segments}</span>
                   </button>
-                  {generatingChapter === +chIdx && chapterProgress ? (
-                    <div className="mr-2 w-20">
+                  {generatingChapter === +chIdx ? (
+                    <div className="mr-2 w-24">
                       <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
                         <div
-                          className="h-full bg-coral rounded-full transition-all duration-500"
-                          style={{ width: `${chapterProgress.progress}%` }}
+                          className="h-full bg-amber-400 rounded-full transition-all duration-500"
+                          style={{ width: `${chapterProgress?.progress ?? 0}%` }}
                         />
                       </div>
-                      <p className="text-[8px] text-gray-400 text-center mt-0.5">
-                        {chapterProgress.current_step}
+                      <p className="text-[8px] text-amber-600 text-center mt-0.5 animate-pulse">
+                        {chapterProgress?.current_step || "Starting..."}
                       </p>
                     </div>
                   ) : (

@@ -284,6 +284,20 @@ def _generate_illustrations(
     quality_dir = ch_dir / "quality"
     quality_dir.mkdir(parents=True, exist_ok=True)
 
+    # Progress file for frontend polling
+    progress_file = ch_dir / "progress.json"
+    total_pages = len(page_prompts)
+
+    def _update_progress(current_page: int, step: str = ""):
+        progress = int(current_page / total_pages * 100) if total_pages > 0 else 0
+        progress_file.write_text(json.dumps({
+            "status": "generating",
+            "progress": progress,
+            "current_step": step or f"Page {current_page}/{total_pages}",
+            "total_pages": total_pages,
+            "completed_pages": current_page,
+        }))
+
     valid_sheets = [s for s in character_sheets if s.get("sheet_path") and Path(s["sheet_path"]).exists()]
     img_client = _get_client()
 
@@ -313,6 +327,8 @@ def _generate_illustrations(
                 existing = str(candidate)
                 break
 
+        _update_progress(idx_p, f"Generating page {page_num}/{total_pages}...")
+
         if existing:
             print(f"  Page {page_num}: cached, skipping generation")
             ill_path = existing
@@ -325,6 +341,7 @@ def _generate_illustrations(
             if not success:
                 print(f"  Page {page_num}: generation FAILED ({dt_page:.1f}s)")
                 illustrations.append({"page_number": page_num, "image_path": "", "prompt_used": prompt})
+                _update_progress(idx_p + 1, f"Page {page_num} failed, continuing...")
                 continue
             # Resolve actual path
             for ext in (".png", ".jpg"):
@@ -335,6 +352,7 @@ def _generate_illustrations(
             print(f"  Page {page_num}: generated ({dt_page:.1f}s)")
 
         illustrations.append({"page_number": page_num, "image_path": ill_path, "prompt_used": ""})
+        _update_progress(idx_p, f"Quality check page {page_num}...")
 
         # Immediate quality check
         if quality_available and ill_path:
@@ -600,6 +618,10 @@ def generate_chapter(
         print("  No pages to generate.")
         return
 
+    # Write initial progress
+    progress_file = chapter_dir / "progress.json"
+    progress_file.write_text(json.dumps({"status": "generating", "progress": 0, "current_step": "Generating character sheets...", "total_pages": len(scenes), "completed_pages": 0}))
+
     # Step 1: Character sheets
     character_sheets = _generate_character_sheets(book_id, data, segments, chapter_idx)
     _save_step("character_sheets", [
@@ -607,6 +629,8 @@ def generate_chapter(
          "visual_identity": s.get("visual_identity", ""), "background": s.get("background", "")}
         for s in character_sheets
     ])
+
+    progress_file.write_text(json.dumps({"status": "generating", "progress": 5, "current_step": "Simplifying text...", "total_pages": len(scenes), "completed_pages": 0}))
 
     # Step 2: Simplify text
     # Collect chapter_chars for the simplifier (same logic as _generate_character_sheets)
