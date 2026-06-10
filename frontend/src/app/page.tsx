@@ -38,10 +38,10 @@ export default function Home() {
             onClick={() => setView("home")}
             className="flex items-center gap-3 hover:opacity-80 transition-opacity"
           >
-            <span className="text-3xl">📖</span>
+            <span className="text-3xl">🌱</span>
             <div>
               <h1 className="font-display text-xl font-bold text-gray-800">
-                Picture Book Generator
+                StorySprout
               </h1>
               <p className="text-xs text-gray-500">
                 Transform any book into a children&apos;s picture book
