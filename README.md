@@ -152,8 +152,9 @@ POST   /api/book/{id}/characters/{name}/regenerate         # Regenerate characte
 | PDF export | ReportLab |
 | Backend | FastAPI + uvicorn |
 | Frontend | Next.js 15 + Tailwind CSS |
-| Database | JSON files + MongoDB (sync) |
-| Agent orchestrator | Gemini Function Calling + 17 MCP tools |
+| Database | MongoDB via official MCP server (read + write) + JSON fallback |
+| Partner integration | MongoDB MCP server — Model Context Protocol (stdio) |
+| Multi-agent pipeline | Analyzer → Writer → Artist → QA (fixed-order orchestration) |
 
 ## Project Structure
 
@@ -255,7 +256,7 @@ picture_book_generator/
 - **Style consistency** — When few character sheets match a scene, other sheets used as style references to prevent drift.
 - **Auto-fix feedback loop** — Quality check → AI Chat → fix prompts → regenerate. Fully automated.
 - **Dual LLM** — DeepSeek for text tasks (cheap), Gemini for image generation (hackathon requirement). Switchable via `TEXT_LLM` env var.
-- **MongoDB sync** — All edits sync to MongoDB (best-effort). JSON files are the primary data store.
+- **MongoDB MCP as data layer** — Reads (preprocess) and writes (character consistency hub) go through MongoDB's official MCP server. JSON files remain as a resilient fallback.
 
 ## Environment Variables
 
@@ -266,6 +267,41 @@ picture_book_generator/
 | `TEXT_LLM` | No | `"deepseek"` (default) or `"gemini"` |
 | `MONGODB_URI` | No | MongoDB connection string |
 | `MONGODB_DB` | No | Database name (default: `picture_book_generator`) |
+
+## MongoDB MCP Integration (MongoDB Partner Track)
+
+This project integrates **MongoDB's official MCP server** (`mongodb-mcp-server`)
+over the Model Context Protocol (stdio). The pipeline talks to MongoDB through
+MCP for **both reads and writes** — not a direct driver — satisfying the
+hackathon requirement to integrate a partner's MCP server.
+(`src/core/mcp_client.py` implements the MCP stdio client; the server is
+launched on demand via `npx mongodb-mcp-server`, configured by
+`MDB_MCP_CONNECTION_STRING`.)
+
+**Read path** — `AnalyzerAgent.load_preprocess()` loads all preprocess
+documents through the MCP `find` tool, with a pymongo / local-file fallback
+for resilience.
+
+**Write path — the Character Consistency Hub** — After character reference
+sheets are generated, each character's visual identity (reference-sheet path,
+visual description, color palette) is written back into the `characters`
+collection through the MCP `update-many` tool. This makes MongoDB the
+**single source of truth** for cross-page character consistency:
+
+```
+preprocess → write each character's visual identity to MongoDB (via MCP)
+                            ↓
+generate page N → read that character's sheet + identity from MongoDB (via MCP)
+                            ↓
+       same canonical reference everywhere → character looks identical book-wide
+```
+
+Keeping one character looking the same across an entire book is the hard part
+of AI picture books; centralizing the canonical definition in MongoDB (read via
+MCP on every page) is what makes it reliable.
+
+**Future work** — aggregation queries over `segments` (character co-occurrence,
+scene frequency) to drive richer generation decisions.
 
 ## MongoDB Collections
 

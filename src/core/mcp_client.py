@@ -32,18 +32,21 @@ _TAG_RE = re.compile(
 )
 
 
-def _server_params():
-    """Build stdio launch params for the official MongoDB MCP server."""
+def _server_params(read_only: bool = True):
+    """Build stdio launch params for the official MongoDB MCP server.
+
+    read_only=True (default) launches with --readOnly for the read path;
+    pass read_only=False for the write path (consistency-hub updates).
+    """
     from mcp import StdioServerParameters
     from src.config import MONGODB_URI
 
     env = os.environ.copy()
     env["MDB_MCP_CONNECTION_STRING"] = MONGODB_URI
-    return StdioServerParameters(
-        command="npx",
-        args=["-y", "mongodb-mcp-server@latest", "--readOnly"],
-        env=env,
-    )
+    args = ["-y", "mongodb-mcp-server@latest"]
+    if read_only:
+        args.append("--readOnly")
+    return StdioServerParameters(command="npx", args=args, env=env)
 
 
 def _parse_find_result(text: str) -> list[dict]:
@@ -108,3 +111,47 @@ def load_preprocess_files_via_mcp(book_id: str, names: list[str]) -> dict[str, A
     except Exception as e:
         logger.warning("MCP load_preprocess_files failed for %s: %s", book_id, e)
         return {}
+
+
+async def _update_characters_async(book_id: str, items: list) -> int:
+    """One MCP session: write consistency data into the characters collection."""
+    from mcp import ClientSession
+    from mcp.client.stdio import stdio_client
+    from src.config import MONGODB_DB
+
+    count = {"n": 0}
+    try:
+        async with stdio_client(_server_params(read_only=False)) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                for canonical_name, updates in items:
+                    await session.call_tool(
+                        "update-many",
+                        {
+                            "database": MONGODB_DB,
+                            "collection": "characters",
+                            "filter": {"book_id": book_id, "canonical_name": canonical_name},
+                            "update": {"$set": updates},
+                        },
+                    )
+                    count["n"] += 1
+    except Exception as e:
+        if count["n"] == 0:
+            raise
+        logger.debug("MCP stdio cleanup noise after %d writes: %s", count["n"], e)
+    return count["n"]
+
+
+def update_characters_via_mcp(book_id: str, items: list) -> int:
+    """Persist character consistency data to MongoDB via the MCP server.
+
+    items: list of (canonical_name, updates_dict). One MCP session for all.
+    Returns number of characters written; 0 on failure (best-effort).
+    """
+    if not items:
+        return 0
+    try:
+        return asyncio.run(_update_characters_async(book_id, items))
+    except Exception as e:
+        logger.warning("MCP update_characters failed for %s: %s", book_id, e)
+        return 0

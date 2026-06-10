@@ -558,6 +558,25 @@ def _generate_character_sheets(book_id, preprocess_dir, characters, skip_sheets)
 
     _save(preprocess_dir, "character_sheets", sheets)
 
+    # Consistency data hub: persist each sheet's visual identity + reference
+    # image path into the characters collection via the MongoDB MCP server,
+    # making MongoDB the single source of truth for cross-page consistency.
+    try:
+        from src.core.mcp_client import update_characters_via_mcp
+        items = [
+            (s["character_name"], {
+                "sheet_path": s.get("sheet_path", ""),
+                "portrait_path": s.get("portrait_path", ""),
+                "visual_identity": s.get("visual_identity", ""),
+                "visual_colors": s.get("visual_colors", ""),
+            })
+            for s in sheets if s.get("character_name")
+        ]
+        n = update_characters_via_mcp(book_id, items)
+        print(f"  → synced {n} character sheets to MongoDB via MCP (consistency hub)")
+    except Exception as e:
+        print(f"  → MCP consistency sync skipped: {e}")
+
 
 def _layer4_replace_aliases(book_id, preprocess_dir, chapters, full_text, alias_map):
     """Layer 4: Alias replacement in text."""
