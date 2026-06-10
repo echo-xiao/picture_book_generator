@@ -35,6 +35,21 @@ class FetchUrlRequest(BaseModel):
 async def fetch_book_from_url(req: FetchUrlRequest) -> dict[str, Any]:
     """Fetch plain text from a URL (e.g. Project Gutenberg)."""
     import httpx
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    parsed = urlparse(req.url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Only http/https URLs are allowed")
+    try:
+        resolved = socket.getaddrinfo(parsed.hostname, None)
+    except socket.gaierror:
+        raise HTTPException(status_code=400, detail="Could not resolve URL host")
+    for info in resolved:
+        ip = ipaddress.ip_address(info[4][0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            raise HTTPException(status_code=400, detail="URL resolves to a disallowed address")
 
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
@@ -183,7 +198,7 @@ async def start_generation_upload(
     """Start preprocess from file upload. Returns book_id for editor redirect."""
     upload_dir = GENERATED_DIR / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
-    dest = upload_dir / (file.filename or "upload.txt")
+    dest = upload_dir / Path(file.filename or "upload.txt").name
     contents = await file.read()
     dest.write_bytes(contents)
 

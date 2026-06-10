@@ -255,8 +255,7 @@ def _replace_aliases(text: str, alias_map: dict[str, str]) -> str:
     """Replace multi-word aliases in text with canonical names."""
     for alias, canonical in sorted(alias_map.items(), key=lambda x: -len(x[0])):
         pattern = r'\b' + re.escape(alias) + r'\b'
-        if canonical.lower() not in text.lower():
-            text = re.sub(pattern, canonical, text, flags=re.IGNORECASE)
+        text = re.sub(pattern, canonical, text, flags=re.IGNORECASE)
     return text
 
 
@@ -466,7 +465,7 @@ def _layer2_identify_characters(book_id, preprocess_dir, chapters, title):
     print(f"  {len(characters)} characters in {time.time() - t0:.1f}s:")
     for c in characters:
         aliases = ", ".join(c.get("aliases", [])[:3])
-        print(f"    {c['canonical_name']} ({c['gender']}, {c['role']}) [{aliases}]")
+        print(f"    {c.get('canonical_name', '?')} ({c.get('gender', '?')}, {c.get('role', '?')}) [{aliases}]")
     # Auto-fill missing visual details using LLM
     chars_needing_fill = [c for c in characters if not c.get("visual_details") or not c.get("visual_details", {}).get("hair")]
     if chars_needing_fill:
@@ -507,7 +506,7 @@ Return JSON:
     locations = _llm_identify_locations(title, chapters)
     print(f"  {len(locations)} locations in {time.time() - t1:.1f}s:")
     for loc in locations:
-        print(f"    {loc['name']} ({loc.get('importance', '?')})")
+        print(f"    {loc.get('name', '?')} ({loc.get('importance', '?')})")
     _save(preprocess_dir, "llm_locations", {"locations": locations})
 
     return characters

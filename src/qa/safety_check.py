@@ -123,9 +123,10 @@ def check_safety(pages: list[dict], age_group: str) -> dict[str, Any]:
         keyword_penalty = min(len(flagged_pages) * 0.15, 0.6)
         overall_score = max(0.0, overall_score - keyword_penalty)
 
-    is_safe = overall_score >= 0.6 and all(
-        "Keyword flags" not in fp.get("reason", "") for fp in flagged_pages
-    )
+    # Keyword hits only degrade the score (above); the final verdict combines the
+    # overall score with Gemini's judgment. Classic source texts always contain
+    # flagged keywords ("sword", "blood"), so a keyword hit must not be a hard veto.
+    is_safe = overall_score >= 0.6 and gemini_result["is_safe"]
 
     return {
         "is_safe": is_safe,

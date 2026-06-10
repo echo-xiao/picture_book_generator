@@ -26,9 +26,10 @@ steps:
       - '--timeout'
       - '600'
       - '--min-instances'
-      - '0'
+      - '1'
       - '--max-instances'
       - '1'
+      - '--no-cpu-throttling'
 
 images:
   - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/picture-book-gen:$COMMIT_SHA'

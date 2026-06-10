@@ -56,7 +56,9 @@ GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 @app.get("/static/{file_path:path}")
 async def serve_static(file_path: str):
     """Serve from local disk if available, otherwise redirect to GCS."""
-    local_path = GENERATED_DIR / file_path
+    local_path = (GENERATED_DIR / file_path).resolve()
+    if not local_path.is_relative_to(GENERATED_DIR.resolve()):
+        return JSONResponse({"error": "Not found"}, status_code=404)
     if local_path.exists() and local_path.is_file():
         from fastapi.responses import FileResponse
         return FileResponse(str(local_path))

@@ -264,31 +264,39 @@ def _generate_single_page(
     # Default: Gemini
     contents = _build_reference_content(prompt_text, valid_sheets, style_ref_path, in_scene_names, scene_sheet_path)
 
-    try:
-        response = client.models.generate_content(
-            model=GEMINI_IMAGE_MODEL,
-            contents=contents,
-            config=genai.types.GenerateContentConfig(
-                response_modalities=["TEXT", "IMAGE"],
-                image_config=genai.types.ImageConfig(
-                    aspect_ratio="1:1",
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_IMAGE_MODEL,
+                contents=contents,
+                config=genai.types.GenerateContentConfig(
+                    response_modalities=["TEXT", "IMAGE"],
+                    image_config=genai.types.ImageConfig(
+                        aspect_ratio="1:1",
+                    ),
                 ),
-            ),
-        )
+            )
 
-        if _extract_image(response, save_path):
-            for ext in (".png", ".jpg"):
-                candidate = save_path.with_suffix(ext)
-                if candidate.exists():
-                    return True, str(candidate), prompt_text
-        return False, "", prompt_text
+            if _extract_image(response, save_path):
+                for ext in (".png", ".jpg"):
+                    candidate = save_path.with_suffix(ext)
+                    if candidate.exists():
+                        return True, str(candidate), prompt_text
+            return False, "", prompt_text
 
-    except Exception as e:
-        error_str = str(e).lower()
-        if any(kw in error_str for kw in ["rate limit", "429", "resource exhausted"]):
-            time.sleep(3 + random.uniform(0, 2))
-        logger.warning("Generation failed for %s: %s", save_path.name, e)
-        return False, "", prompt_text
+        except Exception as e:
+            error_str = str(e).lower()
+            is_rate_limit = any(kw in error_str for kw in ["rate limit", "429", "resource exhausted"])
+            if is_rate_limit and attempt < MAX_RETRIES - 1:
+                wait = (2 ** attempt) * 5 + random.uniform(0, 3)
+                logger.warning("Rate limited on %s, retry %d/%d in %.1fs",
+                               save_path.name, attempt + 1, MAX_RETRIES, wait)
+                time.sleep(wait)
+                continue
+            logger.warning("Generation failed for %s: %s", save_path.name, e)
+            return False, "", prompt_text
+
+    return False, "", prompt_text
 
 
 def _find_scene_sheet(book_id: str, scene_background: str) -> str | None:
@@ -404,6 +412,9 @@ def generate_illustrations(
             logger.info("Page %d: saved to %s", page_num, image_path)
         else:
             logger.warning("Page %d: generation failed", page_num)
+
+        # Throttle between real API calls to avoid free-tier rate limits.
+        time.sleep(2)
 
     logger.info("Generated %d/%d illustrations", sum(1 for r in results if r["image_path"]), len(results))
     return results

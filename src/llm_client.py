@@ -75,6 +75,8 @@ def _call_gemini(prompt: str, system: str = "", max_retries: int = 3) -> str:
                 contents=prompt,
                 config=config,
             )
+            if response.text is None:
+                raise ValueError("Gemini returned empty response (blocked or truncated)")
             return response.text
         except Exception as e:
             error_str = str(e).lower()

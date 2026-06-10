@@ -33,7 +33,9 @@ _mongo_client: Optional[motor.motor_asyncio.AsyncIOMotorClient] = None
 def _get_db() -> motor.motor_asyncio.AsyncIOMotorDatabase:
     global _mongo_client
     if _mongo_client is None:
-        _mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI)
+        _mongo_client = motor.motor_asyncio.AsyncIOMotorClient(
+            MONGODB_URI, serverSelectionTimeoutMS=5000
+        )
     return _mongo_client[MONGODB_DB]
 
 
@@ -68,12 +70,27 @@ async def get_book(book_id: str) -> Optional[dict[str, Any]]:
 
 
 async def list_books() -> list[dict[str, Any]]:
-    db = _get_db()
-    cursor = db.books.find(
-        {},
-        {"_id": 0, "book_id": 1, "title": 1, "created_at": 1, "config": 1},
-    ).sort("created_at", -1)
-    return await cursor.to_list(length=200)
+    try:
+        db = _get_db()
+        cursor = db.books.find(
+            {},
+            {"_id": 0, "book_id": 1, "title": 1, "created_at": 1, "config": 1},
+        ).sort("created_at", -1)
+        books = await cursor.to_list(length=200)
+    except Exception as e:
+        logger.warning("list_books: MongoDB unavailable, returning empty list (%s)", e)
+        return []
+
+    # Dedupe: per-chapter writes and case-variant book_ids create duplicate cards.
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for b in books:
+        key = (b.get("book_id") or "").lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(b)
+    return deduped
 
 
 async def delete_book(book_id: str) -> bool:

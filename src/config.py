@@ -90,7 +90,7 @@ ILLUSTRATION_STYLES = {
     ),
 }
 DEFAULT_STYLE = ILLUSTRATION_STYLES["color_monster"]
-NEGATIVE_PROMPT = "scary, violent, dark, photorealistic, 3D render, adult content, blood, weapons, text, words, letters"
+NEGATIVE_PROMPT = "scary, violent, dark, photorealistic, 3D render, adult content, blood, weapons"
 
 # Age presets
 AGE_PRESETS = {

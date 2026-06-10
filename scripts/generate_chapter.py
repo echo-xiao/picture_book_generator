@@ -317,7 +317,9 @@ def main():
     for ch_idx in chapter_indices:
         generate_chapter(args.book, data, ch_idx, page_filter=page_filter, age_group=args.age)
 
-    build_combined_pdf(args.book, data, chapter_indices)
+    # Rebuild the PDF from ALL generated chapters, not just the one(s) just
+    # generated — otherwise regenerating one chapter clobbers the full-book PDF.
+    build_combined_pdf(args.book, data)
 
 
 if __name__ == "__main__":

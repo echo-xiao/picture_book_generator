@@ -201,15 +201,20 @@ async def generate_chapter_endpoint(
 
     async def _gen():
         import asyncio as _asyncio
+        import sys
         proc = await _asyncio.create_subprocess_exec(
-            "python", "scripts/generate_chapter.py", "--book", book_id, "--chapter", str(ch_idx), "--with-special",
+            sys.executable, "scripts/generate_chapter.py", "--book", book_id, "--chapter", str(ch_idx), "--with-special",
             cwd=str(Path(__file__).parent.parent.parent),
             stdout=_asyncio.subprocess.PIPE,
             stderr=_asyncio.subprocess.PIPE,
         )
-        await proc.communicate()
-        # Mark complete
-        progress_file.write_text(json.dumps({"status": "complete", "progress": 100, "current_step": "Done", "total_pages": 0, "completed_pages": 0}))
+        _stdout, _stderr = await proc.communicate()
+        if proc.returncode == 0:
+            progress_file.write_text(json.dumps({"status": "complete", "progress": 100, "current_step": "Done", "total_pages": 0, "completed_pages": 0}))
+        else:
+            err_tail = (_stderr or b"").decode("utf-8", errors="replace")[-800:]
+            logger.error("Chapter generation failed for %s ch%02d: %s", book_id, ch_idx, err_tail)
+            progress_file.write_text(json.dumps({"status": "failed", "progress": 100, "current_step": "Generation failed", "total_pages": 0, "completed_pages": 0, "error": err_tail}))
 
     background_tasks.add_task(_gen)
     return {"status": "generating", "book_id": book_id, "chapter": ch_idx}
