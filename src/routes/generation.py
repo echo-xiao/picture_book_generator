@@ -143,23 +143,65 @@ async def regenerate_segment_illustration(
         )
         logger.info("Regeneration complete for segment %d (page %d)", seg_id, page_num)
 
-        # Auto quality check on the freshly generated page
+        # Auto quality check on the freshly generated page, with bounded
+        # self-correction: score < 50 -> one retry with QA feedback, keep
+        # whichever image scores higher
         try:
+            import shutil
             from src.generation.gemini_consistency_check import check_page_quality
-            ill_path = ""
-            for ext in (".png", ".jpg"):
-                img = ch_dir / f"page_{page_num:03d}{ext}"
-                if img.exists():
-                    ill_path = str(img)
-                    break
-            if ill_path:
-                scene_chars = target.get("characters_in_scene", [])
-                page_text = simplified_text or target.get("text", "")
-                q_result = await run_in_threadpool(
-                    check_page_quality, ill_path, character_sheets, page_text, scene_chars, page_num
+
+            def _find_page_image() -> str:
+                for ext in (".png", ".jpg"):
+                    img = ch_dir / f"page_{page_num:03d}{ext}"
+                    if img.exists():
+                        return str(img)
+                return ""
+
+            def _run_quality(path: str) -> dict:
+                res = check_page_quality(
+                    path, character_sheets,
+                    simplified_text or target.get("text", ""),
+                    target.get("characters_in_scene", []), page_num,
                 )
-                q_result["page"] = page_num
-                q_result["segment_id"] = seg_id
+                res["page"] = page_num
+                res["segment_id"] = seg_id
+                return res
+
+            ill_path = _find_page_image()
+            if ill_path:
+                q_result = await run_in_threadpool(_run_quality, ill_path)
+                feedback = q_result.get("regeneration_feedback", "")
+                old_score = q_result.get("overall_score", 100)
+                if old_score < 50 and feedback:
+                    logger.info("Self-correct: segment %d scored %d, retrying with QA feedback",
+                                seg_id, old_score)
+                    bad = Path(ill_path)
+                    backup = history_dir / f"{bad.stem}_selfcorrect_prev{bad.suffix}"
+                    # Move aside so the generation checkpoint doesn't skip
+                    shutil.move(str(bad), backup)
+                    await run_in_threadpool(
+                        generate_illustrations, [page_prompt], character_sheets, book_id,
+                        None, str(ch_dir), feedback,
+                    )
+                    new_path = _find_page_image()
+                    if not new_path:
+                        shutil.copy2(backup, bad)
+                        q_result["self_correct_attempted"] = True
+                    else:
+                        new_result = await run_in_threadpool(_run_quality, new_path)
+                        new_score = new_result.get("overall_score", 0)
+                        kept_new = new_score >= old_score
+                        if not kept_new:
+                            Path(new_path).unlink(missing_ok=True)
+                            shutil.copy2(backup, bad)
+                        q_result = new_result if kept_new else q_result
+                        q_result["self_correct_attempted"] = True
+                        q_result["self_correct"] = {
+                            "old_score": old_score, "new_score": new_score,
+                            "kept": "new" if kept_new else "old",
+                        }
+                        logger.info("Self-correct: segment %d %d%% -> %d%%, kept %s",
+                                    seg_id, old_score, new_score, "new" if kept_new else "old")
                 q_dir = ch_base / "quality"
                 q_dir.mkdir(parents=True, exist_ok=True)
                 (q_dir / f"page_{page_num:03d}_quality.json").write_text(

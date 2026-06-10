@@ -133,7 +133,9 @@ def simplify_text(
                 scene = {**scene, "previous_page_text": prev_text}
             result = simplify_text([scene], age_group, original_text, language, characters)
             if result:
-                result[0]["page_number"] = i + 1
+                # Keep the scene's real page number — sequential renumbering
+                # breaks partial runs (e.g. --pages 13,29 became pages 4,5)
+                result[0]["page_number"] = scene.get("page_number", i + 1)
                 all_results.append(result[0])
                 prev_text = result[0].get("page_text", "")
         return all_results

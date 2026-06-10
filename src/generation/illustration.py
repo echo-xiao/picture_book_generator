@@ -353,6 +353,7 @@ def generate_illustrations(
     book_id: str,
     style_ref_path: str | None = None,
     pages_dir: str | Path | None = None,
+    correction_feedback: str | None = None,
 ) -> list[dict]:
     """Generate illustrations — one shot per page, no retries.
 
@@ -362,6 +363,8 @@ def generate_illustrations(
         book_id: Unique book identifier.
         style_ref_path: Optional style reference image.
         pages_dir: Override output directory for pages.
+        correction_feedback: QA feedback injected into the prompt when
+            regenerating a page that failed quality review.
     """
     client = _get_client()
     output_dir = Path(pages_dir) if pages_dir else GENERATED_DIR / book_id / "pages"
@@ -407,7 +410,8 @@ def generate_illustrations(
             logger.info("Page %d: using scene sheet %s", page_num, Path(scene_sheet).name)
 
         success, image_path, prompt = _generate_single_page(
-            client, page, valid_sheets, save_path, style_ref_path, scene_sheet
+            client, page, valid_sheets, save_path, style_ref_path, scene_sheet,
+            correction_feedback=correction_feedback,
         )
 
         results.append({
