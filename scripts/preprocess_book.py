@@ -410,12 +410,62 @@ def _save(preprocess_dir, name, data, subdir=None):
             pass  # graceful fallback
 
 
+def _strip_book_metadata(text: str) -> str:
+    """Remove front matter (TOC, dedication, epigraph, copyright) from book text.
+
+    Finds the first substantial narrative paragraph after any preamble.
+    (Moved here from the now-deleted src/agent/mcp_server.py.)
+    """
+    lines = text.split("\n")
+    metadata_patterns = [
+        re.compile(r'^\s*table of contents\s*$', re.IGNORECASE),
+        re.compile(r'^\s*contents\s*$', re.IGNORECASE),
+        re.compile(r'^\s*copyright\s', re.IGNORECASE),
+        re.compile(r'^\s*all rights reserved', re.IGNORECASE),
+        re.compile(r'^\s*published by\s', re.IGNORECASE),
+        re.compile(r'^\s*dedication\s*$', re.IGNORECASE),
+        re.compile(r'^\s*preface\s*$', re.IGNORECASE),
+        re.compile(r'^\s*foreword\s*$', re.IGNORECASE),
+        re.compile(r'^\s*ISBN\s', re.IGNORECASE),
+        re.compile(r'^\s*(I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII)\s*$'),
+    ]
+    content_start = 0
+    found = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if any(p.match(stripped) for p in metadata_patterns):
+            continue
+        if i < 80 and len(stripped) < 40:
+            continue
+        if i < 80 and line.startswith('  ') and len(stripped) < 60:
+            continue
+        if len(stripped) > 50:
+            content_start = i
+            found = True
+            break
+    if not found:
+        for i, line in enumerate(lines[:100]):
+            stripped = line.strip()
+            if re.match(r'^(chapter\s+\d+|chapter\s+[ivxlc]+)\s*$', stripped, re.IGNORECASE):
+                for j in range(i + 1, min(i + 5, len(lines))):
+                    if lines[j].strip() and len(lines[j].strip()) > 30:
+                        content_start = i
+                        found = True
+                        break
+                if found:
+                    break
+    result = "\n".join(lines[content_start:])
+    print(f"  Stripped metadata: kept from line {content_start}/{len(lines)}")
+    return result
+
+
 def _layer1_extract_text(input_path, book_id, preprocess_dir):
     """Layer 1: Text extraction + chapter split."""
     print("\n[Layer 1/6] Extracting text...")
     t0 = time.time()
     from src.extraction import extract_text
-    from src.agent.mcp_server import _strip_book_metadata
 
     source = input_path.read_text(encoding="utf-8", errors="replace")
     print(f"Loaded {len(source)} chars from {input_path.name}")

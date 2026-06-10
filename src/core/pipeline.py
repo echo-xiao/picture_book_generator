@@ -101,65 +101,8 @@ async def delete_book(book_id: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Main entry point: delegates to the Gemini Agent
+# NOTE: The Gemini function-calling orchestrator path (generate_picture_book →
+# run_agent) was removed. The live pipeline runs via scripts/generate_chapter.py
+# + src/agents/ (Analyzer→Writer→Artist→QA). This module now only provides the
+# MongoDB status/book helpers above.
 # ---------------------------------------------------------------------------
-
-StatusCallback = Optional[Callable[[GenerationStatus], Coroutine[Any, Any, None]]]
-
-
-async def generate_picture_book(
-    source: str,
-    config: GenerationConfig,
-    book_id: str | None = None,
-    status_callback: StatusCallback = None,
-) -> PictureBook:
-    """Generate a picture book using the Gemini Agent orchestrator.
-
-    The agent uses function calling to invoke pipeline tools (MCP tools),
-    deciding the execution order and handling retries autonomously.
-    """
-    if book_id is None:
-        book_id = uuid.uuid4().hex[:12]
-
-    # Save initial status
-    status = GenerationStatus(
-        book_id=book_id,
-        status=StatusEnum.QUEUED,
-        progress=0,
-        current_step="Starting agent",
-    )
-    await save_status(status)
-
-    # Status callback that also persists to MongoDB
-    async def _status_cb(s: GenerationStatus) -> None:
-        await save_status(s)
-        if status_callback:
-            await status_callback(s)
-
-    try:
-        from src.agent.orchestrator import run_agent
-
-        book = await run_agent(
-            source=source,
-            config=config,
-            book_id=book_id,
-            status_callback=_status_cb,
-        )
-
-        # Save final book to MongoDB
-        await save_book(book)
-
-        # Update status to complete
-        status.status = StatusEnum.COMPLETE
-        status.progress = 100
-        status.current_step = "Complete"
-        await save_status(status)
-
-        return book
-
-    except Exception as exc:
-        logger.exception("Agent failed for book_id=%s", book_id)
-        status.status = StatusEnum.FAILED
-        status.error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
-        await save_status(status)
-        raise

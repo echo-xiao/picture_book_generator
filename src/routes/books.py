@@ -16,7 +16,6 @@ from src.config import GENERATED_DIR
 from src.core.models import GenerationConfig
 from src.core.pipeline import (
     delete_book,
-    generate_picture_book,
     get_book,
     get_status,
     list_books,
@@ -139,13 +138,6 @@ async def _run_preprocess(book_id: str, dest: Path, gemini_api_key: str | None =
             }))
     except Exception:
         logger.exception("Preprocess crashed for %s", book_id)
-
-
-async def _run_generation(source: str, config: GenerationConfig, book_id: str) -> None:
-    try:
-        await generate_picture_book(source, config, book_id=book_id)
-    except Exception:
-        logger.exception("Background generation failed for book_id=%s", book_id)
 
 
 # ---------------------------------------------------------------------------
