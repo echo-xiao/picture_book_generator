@@ -485,7 +485,7 @@ async def simplify_segment_text(book_id: str, seg_id: int) -> dict[str, Any]:
     if not target:
         raise HTTPException(status_code=404, detail=f"Segment {seg_id} not found.")
 
-    from src.agent.text_simplifier import simplify_text
+    from src.generation.text_simplifier import simplify_text
     scene = {
         "page_number": 1,
         "original_text": target.get("text", ""),

@@ -68,7 +68,7 @@ async def regenerate_segment_illustration(
         quality_file.rename(history_dir / f"page_{page_num:03d}_{ts}_quality.json")
 
     async def _regen():
-        from src.agent.text_simplifier import simplify_text
+        from src.generation.text_simplifier import simplify_text
         from src.generation.illustration import generate_illustrations
         from src.generation.character_sheet import _safe_filename, generate_character_sheets
 

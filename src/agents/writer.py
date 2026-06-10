@@ -40,7 +40,7 @@ class WriterAgent:
         Returns:
             List of simplified scene dicts with page_text and scene_direction.
         """
-        from src.agent.text_simplifier import simplify_text
+        from src.generation.text_simplifier import simplify_text
 
         print(f"\n[Writer Agent] Simplifying {len(scenes)} pages (age {self.age_group})...")
         t0 = time.time()

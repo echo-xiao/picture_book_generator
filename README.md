@@ -1,8 +1,30 @@
-# Picture Book Generator
+# 🌱 StorySprout
 
-Transform any book into a children's picture book with AI-powered analysis, illustration generation, and interactive editing.
+**Turn any classic novel into a character-consistent children's picture book.**
 
-**Google Cloud Rapid Agent Hackathon** | Deadline: 2026-06-11 | [Devpost](https://rapid-agent.devpost.com/)
+Let a 6-year-old experience *The Great Gatsby* or *A Tale of Two Cities* — not a dumbed-down summary, but a real illustrated picture book that preserves the story, characters, and era. The hard part isn't generating images; it's keeping the **same character looking the same** across 40 pages — that's what StorySprout solves.
+
+**Google Cloud Rapid Agent Hackathon** · Track: MongoDB · [Devpost](https://rapid-agent.devpost.com/)
+
+---
+
+## 💡 The Product (Business)
+
+| | |
+|---|---|
+| **Problem** | Classic literature is locked behind dense prose that kids can't read. |
+| **Solution** | Upload a classic novel → get a full picture book where every character stays visually consistent across the whole book, in period-accurate clothing, with the story text drawn naturally into the art. |
+| **Who it's for** | Parents, educators, early readers — making the classics accessible to children. |
+| **Moat** | Cross-page **character consistency** (most AI picture-book tools can't keep a character's face stable) + a genuine **MongoDB MCP integration** as the consistency data hub. |
+| **Status** | Live on Cloud Run · multi-agent pipeline · MongoDB MCP (read + write). |
+
+> 📄 Submission materials (Devpost description + 3-min video script + checklist): see **[SUBMISSION.md](SUBMISSION.md)**
+
+---
+
+## 🛠️ Technical Overview
+
+The rest of this README is the **technical documentation** — architecture, pipeline, MongoDB MCP integration, and API.
 
 ## How It Works
 
