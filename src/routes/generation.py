@@ -203,12 +203,19 @@ async def generate_chapter_endpoint(
         import asyncio as _asyncio
         import sys
         proc = await _asyncio.create_subprocess_exec(
-            sys.executable, "scripts/generate_chapter.py", "--book", book_id, "--chapter", str(ch_idx), "--with-special",
+            sys.executable, "scripts/generate_chapter.py", "--book", book_id, "--chapter", str(ch_idx),
             cwd=str(Path(__file__).parent.parent.parent),
             stdout=_asyncio.subprocess.PIPE,
             stderr=_asyncio.subprocess.PIPE,
         )
-        _stdout, _stderr = await proc.communicate()
+        try:
+            _stdout, _stderr = await _asyncio.wait_for(proc.communicate(), timeout=900)
+        except _asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            logger.error("Chapter generation timed out for %s ch%02d", book_id, ch_idx)
+            progress_file.write_text(json.dumps({"status": "failed", "progress": 100, "current_step": "Generation timed out", "total_pages": 0, "completed_pages": 0}))
+            return
         if proc.returncode == 0:
             progress_file.write_text(json.dumps({"status": "complete", "progress": 100, "current_step": "Done", "total_pages": 0, "completed_pages": 0}))
         else:

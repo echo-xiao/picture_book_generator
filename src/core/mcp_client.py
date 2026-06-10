@@ -43,7 +43,9 @@ def _server_params(read_only: bool = True):
 
     env = os.environ.copy()
     env["MDB_MCP_CONNECTION_STRING"] = MONGODB_URI
-    args = ["-y", "mongodb-mcp-server@latest"]
+    # No "@latest" — use the globally pre-installed version (Dockerfile) and
+    # avoid an npm-registry version check on every launch.
+    args = ["-y", "mongodb-mcp-server"]
     if read_only:
         args.append("--readOnly")
     return StdioServerParameters(command="npx", args=args, env=env)

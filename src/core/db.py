@@ -26,12 +26,19 @@ logger = logging.getLogger(__name__)
 
 _client: Optional[pymongo.MongoClient] = None
 _available: Optional[bool] = None
+_last_fail: float = 0.0
+_RETRY_AFTER = 30.0  # seconds to back off before retrying a failed connection
 
 
 def _get_db() -> Optional[pymongo.database.Database]:
-    """Get MongoDB database, or None if unavailable."""
-    global _client, _available
-    if _available is False:
+    """Get MongoDB database, or None if unavailable.
+
+    On failure, back off for _RETRY_AFTER seconds instead of disabling MongoDB
+    permanently — a transient Atlas blip should not kill the layer for the
+    whole process lifetime.
+    """
+    global _client, _available, _last_fail
+    if _available is False and (time.time() - _last_fail) < _RETRY_AFTER:
         return None
     try:
         if _client is None:
@@ -40,13 +47,11 @@ def _get_db() -> Optional[pymongo.database.Database]:
             _available = True
             logger.info("MongoDB connected: %s", MONGODB_URI)
         return _client[MONGODB_DB]
-    except ServerSelectionTimeoutError:
-        _available = False
-        logger.warning("MongoDB unavailable at %s", MONGODB_URI)
-        return None
     except Exception as e:
         _available = False
-        logger.warning("MongoDB error: %s", e)
+        _last_fail = time.time()
+        _client = None  # reset so a later call can reconnect
+        logger.warning("MongoDB unavailable (%s); backing off %.0fs", e, _RETRY_AFTER)
         return None
 
 
