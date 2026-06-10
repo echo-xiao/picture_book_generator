@@ -4,6 +4,8 @@ WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci
 COPY frontend/ ./
+# Ensure public dir exists even if empty
+RUN mkdir -p public
 ENV API_URL=http://localhost:8000
 RUN npm run build
 
