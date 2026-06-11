@@ -5,9 +5,10 @@ import { UploadForm } from "@/components/UploadForm";
 import { GenerationProgress } from "@/components/GenerationProgress";
 import { BookReader } from "@/components/BookReader";
 import { BookLibrary } from "@/components/BookLibrary";
+import { AgentPanel } from "@/components/AgentPanel";
 import type { PictureBook, GenerationConfig } from "@/types";
 
-type View = "home" | "generating" | "reading" | "library";
+type View = "home" | "generating" | "reading" | "library" | "agent";
 
 export default function Home() {
   const [view, setView] = useState<View>("home");
@@ -76,6 +77,16 @@ export default function Home() {
             >
               Library
             </button>
+            <button
+              onClick={() => setView("agent")}
+              className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+                view === "agent"
+                  ? "bg-coral text-white shadow-md"
+                  : "text-gray-600 hover:bg-peach/50"
+              }`}
+            >
+              AI Agent
+            </button>
           </nav>
         </div>
       </header>
@@ -98,6 +109,7 @@ export default function Home() {
         {view === "library" && (
           <BookLibrary onSelectBook={handleSelectBook} />
         )}
+        {view === "agent" && <AgentPanel />}
       </div>
     </main>
   );

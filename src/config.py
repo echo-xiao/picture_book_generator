@@ -14,10 +14,22 @@ GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 # Environment: "test" (DeepSeek + Alicloud) or "production" (Gemini)
 APP_ENV = os.getenv("APP_ENV", "test")
 
-# Gemini
+# Gemini — runs on Vertex AI / "Agent Platform" by default (GEMINI_BACKEND=vertex,
+# uses ADC locally and the attached service account on Cloud Run). Set
+# GEMINI_BACKEND=api_key to use the AI Studio key path instead.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = "gemini-2.5-flash"
-GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image"
+GEMINI_BACKEND = os.getenv("GEMINI_BACKEND", "vertex").lower()  # "vertex" | "api_key"
+GCP_PROJECT = os.getenv("GCP_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT", "picture-book-gen")
+GCP_LOCATION = os.getenv("GCP_LOCATION", "global")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image")
+
+# Vertex AI Agent Engine (Agent Builder's managed runtime) — the deployed ADK
+# book-planning agent that the website's "AI Agent" feature calls.
+AGENT_ENGINE_RESOURCE = os.getenv(
+    "AGENT_ENGINE_RESOURCE",
+    "projects/264948620024/locations/us-central1/reasoningEngines/6588562295436083200",
+)
 
 # DeepSeek (text analysis)
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")

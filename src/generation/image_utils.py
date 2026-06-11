@@ -6,7 +6,7 @@ from pathlib import Path
 
 from google import genai
 
-from src.config import GEMINI_API_KEY
+from src.gemini_backend import make_genai_client
 
 logger = logging.getLogger(__name__)
 
@@ -16,9 +16,7 @@ _client: genai.Client | None = None
 def _get_client() -> genai.Client:
     global _client
     if _client is None:
-        if not GEMINI_API_KEY:
-            raise ValueError("GEMINI_API_KEY is not set")
-        _client = genai.Client(api_key=GEMINI_API_KEY)
+        _client = make_genai_client()
     return _client
 
 

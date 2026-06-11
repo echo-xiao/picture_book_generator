@@ -16,7 +16,7 @@ from typing import Any
 
 from src.config import (
     DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,
-    GEMINI_API_KEY, GEMINI_MODEL,
+    GEMINI_API_KEY, GEMINI_MODEL, GEMINI_BACKEND,
     TEXT_LLM,
 )
 
@@ -60,8 +60,9 @@ def _call_deepseek(prompt: str, system: str = "", max_retries: int = 3, max_toke
 def _call_gemini(prompt: str, system: str = "", max_retries: int = 3) -> str:
     """Call Gemini API."""
     from google import genai
+    from src.gemini_backend import make_genai_client
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    client = make_genai_client()
     config = genai.types.GenerateContentConfig(
         response_mime_type="application/json",
     )
@@ -107,7 +108,7 @@ def generate_json(prompt: str, system: str = "", max_retries: int = 3) -> dict[s
 
     if provider == "deepseek":
         if not DEEPSEEK_API_KEY:
-            if GEMINI_API_KEY:
+            if GEMINI_BACKEND == "vertex" or GEMINI_API_KEY:
                 logger.warning("TEXT_LLM=deepseek but DEEPSEEK_API_KEY not set, falling back to Gemini")
                 raw = _call_gemini(prompt, system, max_retries)
             else:
@@ -116,7 +117,7 @@ def generate_json(prompt: str, system: str = "", max_retries: int = 3) -> dict[s
             raw = _call_deepseek(prompt, system, max_retries)
             logger.debug("Using DeepSeek for text LLM")
     elif provider == "gemini":
-        if not GEMINI_API_KEY:
+        if GEMINI_BACKEND != "vertex" and not GEMINI_API_KEY:
             raise ValueError("TEXT_LLM=gemini but GEMINI_API_KEY is not set.")
         raw = _call_gemini(prompt, system, max_retries)
         logger.debug("Using Gemini for text LLM")

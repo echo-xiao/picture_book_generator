@@ -677,8 +677,9 @@ async def regenerate_scene_sheet(
             return
 
         from google import genai
-        from src.config import GEMINI_API_KEY, GEMINI_IMAGE_MODEL
-        client = genai.Client(api_key=GEMINI_API_KEY)
+        from src.config import GEMINI_IMAGE_MODEL
+        from src.gemini_backend import make_genai_client
+        client = make_genai_client()
         try:
             response = client.models.generate_content(
                 model=GEMINI_IMAGE_MODEL,

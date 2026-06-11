@@ -16,7 +16,8 @@ numpy>=1.26.0
 
 # Layer 3: Gemini Agent
 google-genai>=1.0.0
-google-cloud-aiplatform>=1.60.0
+# >=1.95 for the vertexai.agent_engines client (the website calls the deployed ADK agent)
+google-cloud-aiplatform>=1.95.0
 
 # Layer 4: Image Generation
 Pillow>=10.2.0
