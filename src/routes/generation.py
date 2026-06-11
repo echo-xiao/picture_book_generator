@@ -863,6 +863,9 @@ async def regenerate_scene_sheet(
                     contents=prompt,
                     config=genai.types.GenerateContentConfig(
                         response_modalities=["IMAGE", "TEXT"],
+                        # Keep scene sheets square like character sheets and book
+                        # pages — the Vertex image model defaults to landscape.
+                        image_config=genai.types.ImageConfig(aspect_ratio="1:1"),
                     ),
                 )
                 for part in response.candidates[0].content.parts:

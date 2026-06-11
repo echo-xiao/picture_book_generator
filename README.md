@@ -1,46 +1,79 @@
+<p align="center">
+  <img src="frontend/public/logo.png" alt="StorySprout" width="180" />
+</p>
+
 # 🌱 StorySprout
 
 **Turn any classic novel into a character-consistent children's picture book.**
 
-Let a 6-year-old experience *The Great Gatsby* or *A Tale of Two Cities* — not a dumbed-down summary, but a real illustrated picture book that preserves the story, characters, and era. The hard part isn't generating images; it's keeping the **same character looking the same** across 40 pages — that's what StorySprout solves.
+Let a 6-year-old experience *The Great Gatsby* — not a dumbed-down summary, but a real illustrated picture book that preserves the story, characters, and era. The hard part isn't generating images; it's keeping the **same character looking the same** across 40 pages — that's what StorySprout solves.
 
 **Google Cloud Rapid Agent Hackathon** · Track: MongoDB · [Devpost](https://rapid-agent.devpost.com/)
 
+🔗 **Live demo**: https://picture-book-gen-e3mtc46uua-uc.a.run.app
+
 ---
 
-## 💡 The Product (Business)
+## 💡 The Product
 
 | | |
 |---|---|
 | **Problem** | Classic literature is locked behind dense prose that kids can't read. |
 | **Solution** | Upload a classic novel → get a full picture book where every character stays visually consistent across the whole book, in period-accurate clothing, with the story text drawn naturally into the art. |
 | **Who it's for** | Parents, educators, early readers — making the classics accessible to children. |
-| **Moat** | Cross-page **character consistency** (most AI picture-book tools can't keep a character's face stable) + a genuine **MongoDB MCP integration** as the consistency data hub. |
-| **Status** | Live on Cloud Run · multi-agent pipeline · MongoDB MCP (read + write). |
+| **Moat** | Cross-page **character consistency** (most AI picture-book tools can't keep a character's face stable) + **MongoDB via MCP** as the consistency data hub. |
+| **Status** | Live on Cloud Run · ADK multi-agent pipeline · Gemini 3 on Vertex AI · MongoDB MCP (read + write). |
 
 > 📄 Submission materials (Devpost description + 3-min video script + checklist): see **[SUBMISSION.md](SUBMISSION.md)**
 
 ---
 
-## 🛠️ Technical Overview
+## 🏗️ Architecture
 
-The rest of this README is the **technical documentation** — architecture, pipeline, MongoDB MCP integration, and API.
+One production pipeline, orchestrated with **Google ADK**, powered by **Gemini 3 on Vertex AI**, with **MongoDB (via the official MCP server)** as the consistency data hub — running on **Cloud Run**.
+
+```
+            ┌─────────────────────────── Cloud Run (single container) ───────────────────────────┐
+            │  Next.js 15 (public :8080)  ──reverse proxy──▶  FastAPI (internal :8000)            │
+            │                                                      │                              │
+            │                                   ADK SequentialAgent ("storysprout_pipeline")      │
+            │                                   ┌──────────┬─────────────┬────────┬────────────┐  │
+            │                                   │ Analyzer │ ArtistSetup │ Writer │ IllustrateQA│ │
+            │                                   └────┬─────┴──────┬──────┴───┬────┴──────┬─────┘  │
+            └────────────────────────────────────────┼────────────┼──────────┼───────────┼────────┘
+                                                     │            │          │           │
+                       MongoDB Atlas ◀── MCP (stdio) ┘   Gemini 3.5 Flash + Gemini 3.1 Flash Image
+                       (consistency hub)                        (Vertex AI, location=global)
+```
+
+**The four ADK agents** (`src/agents/adk_pipeline.py`):
+
+| Agent | Role |
+|-------|------|
+| **Analyzer** | Loads preprocess data (characters, segments, annotations) — **MCP-first** from MongoDB, with pymongo / local-file fallback |
+| **ArtistSetup** | Ensures character reference sheets exist; resolves which sheets each page needs |
+| **Writer** | Simplifies the original prose into child-friendly page text |
+| **IllustrateQA** | Generates each page illustration (feeding character sheets as references), runs the 5-dimension quality check, self-corrects failures, exports PDF |
+
+The agents run in fixed order via ADK `SequentialAgent`, in-process (image generation is too heavy for a remote agent runtime), sharing a `PipelineContext`.
 
 ## How It Works
 
 ```
-Upload a book (.txt/.pdf/.epub)
+Upload a book (.txt, or fetch from a URL)
     ↓
-Preprocess: extract text → identify characters → segment into scenes → annotate
+Preprocess (once per book): split chapters → LLM identifies characters/aliases/locations
+    → TextTiling segments scenes → LLM annotates each segment
+    → character visual identities written to MongoDB via MCP (consistency hub)
     ↓
-Generate: simplify text → build prompts → generate illustrations → quality check
+Generate (per chapter): ADK pipeline — simplify text → build prompts
+    → illustrate with character-sheet references → QA each page → self-correct → PDF
     ↓
-Edit: interactive editor with AI chat → regenerate → auto quality check → auto fix
-    ↓
-Export: PDF picture book
+Edit: interactive editor — characters / scenes / pages tabs, regenerate anything,
+    version history, staleness red-flags, live agent activity log
 ```
 
-## Quick Start
+## Quick Start (local)
 
 ```bash
 # 1. Install
@@ -49,7 +82,8 @@ cd frontend && npm install && cd ..
 
 # 2. Configure
 cp .env.example .env
-# Add GEMINI_API_KEY (required) and DEEPSEEK_API_KEY (optional, cheaper text tasks)
+# Default backend is Vertex AI (uses your gcloud ADC + GCP_PROJECT).
+# No GCP project? Set GEMINI_BACKEND=api_key and add GEMINI_API_KEY.
 
 # 3. Start backend
 python -m uvicorn src.app:app --port 8000
@@ -60,23 +94,27 @@ cd frontend && npm run dev
 # 5. Open http://localhost:3000
 ```
 
+CLI (what the web endpoints run under the hood):
+
+```bash
+python scripts/preprocess_book.py --input data/sample_books/the_great_gatsby.txt
+python scripts/generate_chapter.py --book the_great_gatsby --chapter 0 --self-correct
+```
+
 ## Features
 
 ### Interactive Editor (`/editor/{bookId}`)
 
-| Area | Features |
-|------|----------|
-| **Illustration** | View current illustration, regenerate with progress spinner (30-60s) |
-| **Versions** | Thumbnail carousel of current + all history versions, click to switch |
-| **Prompt Editing** | Edit simplified text, scene background, characters & actions, summary, sentiment |
+| Tab | Features |
+|-----|----------|
+| **Characters** | Reference-sheet gallery, edit visual identity fields, regenerate per character, automatic quality check + self-correct, version history |
+| **Scenes** | Major/minor locations extracted by LLM, editable visual details, scene reference image generation, version history |
+| **Pages** | Per-page illustration view, edit simplified text / background / characters & actions, regenerate with progress, version carousel |
+| **Agents** | Live agent activity log — watch the ADK pipeline stages work in real time |
+| **Staleness red-flags** | A page turns red when its illustration is older than a character/scene sheet it depends on |
 | **AI Chat** | Describe what you want in natural language → AI auto-fills prompt fields |
-| **Quality Check** | 5-dimension auto scoring after each regeneration |
-| **Auto Fix** | Score < 70% → AI automatically fixes prompts based on quality feedback |
-| **Character Sheets** | Fuzzy-matched reference images, regenerate per character |
-| **URL Persistence** | Chapter/segment position saved in URL across refreshes |
-| **Auto Simplify** | Empty simplified text auto-generated when switching segments |
 
-### Quality Check (5 Dimensions)
+### Quality Check (5 dimensions, auto + self-correcting)
 
 1. **Character Consistency** — Do characters match their reference sheets?
 2. **Spelling** — Are embedded text words spelled correctly?
@@ -84,211 +122,12 @@ cd frontend && npm run dev
 4. **Name-Face Mismatch** — Do name labels point to the right person?
 5. **Character Count** — Are all expected characters present?
 
+Failed pages are automatically regenerated with corrective feedback (`--self-correct`, also used by the web flow).
+
 ### Other Pages
 
 - **Home** (`/`) — Upload books, browse library
 - **Book Reader** (`/book/{bookId}`) — Full-screen page-flip reading with thumbnails
-
-## Pipeline
-
-### Phase 1: Preprocess (once per book)
-
-```bash
-python scripts/preprocess_book.py --input data/sample_books/a_tale_of_two_cities.txt
-```
-
-| Layer | What happens | Output |
-|-------|-------------|--------|
-| 1 | Extract text, split into chapters | `chapters.json`, `meta.json` |
-| 2 | LLM identifies characters, aliases, gender, appearance | `llm_characters.json`, `alias_map.json` |
-| 3 | Generate character reference sheets (Gemini Image) | `characters/*.png` |
-| 4 | Replace aliases with canonical names in text | `cleaned_chapters.json` |
-| 5 | TextTiling segmentation into scenes | `segments_raw.json` |
-| 6 | LLM annotates each segment: characters, actions, background, sentiment | `analysis.json` |
-
-### Phase 2: Generate (per chapter, on demand)
-
-```bash
-python scripts/generate_chapter.py --book A_TALE_OF_TWO_CITIES --chapter 0
-```
-
-| Step | What happens | Tool |
-|------|-------------|------|
-| 1 | Generate missing character sheets | Gemini Image |
-| 2 | Simplify text for children | DeepSeek |
-| 3 | Build illustration prompts (single scene enforced) | Template |
-| 4 | Generate page illustrations with character sheet references | Gemini 2.5 Flash Image |
-| 5 | Quality check each page (5 dimensions) | Gemini Vision |
-| 6 | Generate special pages (covers, chapter pages) | Gemini Image |
-| 7 | Export PDF (8.5 x 8.5" square format) | ReportLab |
-
-## API Endpoints (27 total)
-
-### Book Management (12)
-```
-GET    /api/health
-POST   /api/generate                          # Create from text
-POST   /api/generate/upload                   # Create from file
-GET    /api/books                             # List all
-GET    /api/books/preprocessed                # List preprocessed
-GET    /api/book/{id}                         # Get details
-DELETE /api/book/{id}                         # Delete
-GET    /api/book/{id}/html                    # HTML version
-GET    /api/book/{id}/pdf                     # PDF download
-GET    /api/book/{id}/preprocess/progress     # Preprocess progress
-GET    /api/book/{id}/preprocess/chapters     # Chapter list
-GET    /api/book/{id}/preprocess/characters   # Character list + sheets
-```
-
-### Editor (8)
-```
-GET    /api/book/{id}/preprocess/chapter/{ch}/segments   # Segments
-PUT    /api/book/{id}/segment/{seg}                      # Update fields
-GET    /api/book/{id}/segment/{seg}/history               # Version history
-POST   /api/book/{id}/segment/{seg}/simplify              # Generate simplified text
-POST   /api/book/{id}/segment/{seg}/background            # Generate background
-POST   /api/book/{id}/segment/{seg}/summarize             # Generate summary
-POST   /api/book/{id}/segment/{seg}/chat                  # AI chat
-```
-
-### Generation & Quality (7)
-```
-POST   /api/book/{id}/segment/{seg}/regenerate            # Regenerate illustration
-POST   /api/book/{id}/chapter/{ch}/generate               # Generate chapter
-GET    /api/book/{id}/chapter/{ch}/progress                # Generation progress
-GET    /api/book/{id}/segment/{seg}/quality                # Cached quality result
-POST   /api/book/{id}/segment/{seg}/quality                # Run quality check
-GET/POST /api/book/{id}/chapter/{ch}/consistency           # Chapter consistency
-POST   /api/book/{id}/characters/{name}/regenerate         # Regenerate character sheet
-```
-
-## Tech Stack
-
-| Component | Technology |
-|-----------|-----------|
-| Text analysis & simplification | DeepSeek |
-| Image generation | Gemini 2.5 Flash Image |
-| Quality check | Gemini Vision |
-| AI Chat assistant | DeepSeek |
-| Text segmentation | TextTiling algorithm |
-| PDF export | ReportLab |
-| Backend | FastAPI + uvicorn |
-| Frontend | Next.js 15 + Tailwind CSS |
-| Database | MongoDB via official MCP server (read + write) + JSON fallback |
-| Partner integration | MongoDB MCP server — Model Context Protocol (stdio) |
-| Multi-agent pipeline | Analyzer → Writer → Artist → QA (fixed-order orchestration) |
-
-## Project Structure
-
-```
-picture_book_generator/
-├── src/                            # Python core library
-│   ├── app.py                      # FastAPI setup + router mounting
-│   ├── config.py                   # API keys, models, styles
-│   ├── llm_client.py               # Unified LLM client (DeepSeek/Gemini)
-│   │
-│   ├── core/                       # Foundation utilities
-│   │   ├── db.py                   # MongoDB data layer (5 collections)
-│   │   ├── models.py               # Pydantic data models
-│   │   ├── pipeline.py             # Book lifecycle + status management
-│   │   ├── state_store.py          # Key-value state for agent
-│   │   └── step_logger.py          # Pipeline step logging
-│   │
-│   ├── routes/                     # API endpoints (27 total)
-│   │   ├── books.py                # Book management (12 endpoints)
-│   │   ├── editor.py               # Editor & segments (8 endpoints)
-│   │   ├── generation.py           # Generation & quality (7 endpoints)
-│   │   └── helpers.py              # Shared JSON utilities
-│   │
-│   ├── agent/                      # AI agent layer
-│   │   ├── orchestrator.py         # Gemini Function Calling agent
-│   │   ├── mcp_server.py           # 17 MCP tools for agent
-│   │   ├── gemini_client.py        # Gemini API wrapper
-│   │   ├── text_simplifier.py      # LLM text rewriting for children
-│   │   └── illustration_prompter.py # LLM prompt generation
-│   │
-│   ├── extraction/                 # Text extraction
-│   │   ├── text_input.py           # TXT files
-│   │   ├── pdf_parser.py           # PDF files
-│   │   └── epub_parser.py          # EPUB files
-│   │
-│   ├── analysis/                   # Text analysis (NLP)
-│   │   ├── chapter_split.py        # TextTiling segmentation
-│   │   ├── complexity.py           # Reading level assessment
-│   │   ├── key_events.py           # Key event extraction
-│   │   └── visual_score.py         # Visual concreteness scoring
-│   │
-│   ├── generation/                 # Image generation
-│   │   ├── image_utils.py          # Shared Gemini client + image loading
-│   │   ├── illustration.py         # Page illustration generation
-│   │   ├── character_sheet.py      # Character reference sheet generation
-│   │   ├── gemini_consistency_check.py  # 5-dimension quality check
-│   │   └── special_pages.py        # Covers, chapter pages, endings
-│   │
-│   ├── qa/                         # Quality assurance (agent tools)
-│   │   ├── safety_check.py         # Content safety
-│   │   ├── readability_check.py    # Reading level
-│   │   ├── coverage_check.py       # Story coverage
-│   │   └── hallucination_check.py  # Hallucination detection
-│   │
-│   └── renderer/
-│       └── pdf_export.py           # PDF generation (8.5x8.5")
-│
-├── scripts/                        # CLI entry points
-│   ├── preprocess_book.py          # 6-layer preprocess pipeline
-│   └── generate_chapter.py         # Chapter generation + quality + PDF
-│
-├── frontend/src/                   # Next.js frontend
-│   ├── app/
-│   │   ├── page.tsx                # Home: upload + library
-│   │   ├── editor/[bookId]/page.tsx # Interactive editor
-│   │   └── book/[bookId]/page.tsx  # Book reader (page-flip)
-│   ├── components/
-│   │   ├── editor/                 # Editor sub-components
-│   │   │   ├── IllustrationPanel.tsx
-│   │   │   ├── QualityCheckPanel.tsx
-│   │   │   ├── CharacterSheetsPanel.tsx
-│   │   │   ├── AIChatPanel.tsx
-│   │   │   └── VersionsCarousel.tsx
-│   │   ├── BookLibrary.tsx
-│   │   ├── UploadForm.tsx
-│   │   └── GenerationProgress.tsx
-│   ├── lib/api.ts                  # API client (27 endpoints)
-│   └── types/index.ts              # TypeScript definitions
-│
-└── data/                           # Generated output (not in git)
-    ├── sample_books/               # Input books (.txt)
-    └── generated/{book_id}/
-        ├── preprocess/             # 6 layers of cached analysis
-        ├── characters/             # Character sheet images
-        ├── chapters/ch{N}/
-        │   ├── pages/              # Page illustrations
-        │   ├── quality/            # Cached quality results
-        │   └── history/            # Previous illustration versions
-        ├── special/                # Cover + special page images
-        └── book.pdf                # Final combined PDF
-```
-
-## Key Design Decisions
-
-- **LLM-first analysis** — Character identification, alias resolution, scene annotation all done by LLM (DeepSeek). No spaCy dependency for character work.
-- **TextTiling for segmentation** — Algorithmic segmentation is more stable/deterministic than LLM splitting. LLM only annotates, doesn't split.
-- **Preprocess once, generate many** — Full book analysis runs once and caches to disk. Chapter generation loads from cache.
-- **Single scene per page** — Prompt enforces one moment in time. No multi-panel layouts.
-- **Style consistency** — When few character sheets match a scene, other sheets used as style references to prevent drift.
-- **Auto-fix feedback loop** — Quality check → AI Chat → fix prompts → regenerate. Fully automated.
-- **Dual LLM** — DeepSeek for text tasks (cheap), Gemini for image generation (hackathon requirement). Switchable via `TEXT_LLM` env var.
-- **MongoDB MCP as data layer** — Reads (preprocess) and writes (character consistency hub) go through MongoDB's official MCP server. JSON files remain as a resilient fallback.
-
-## Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `GEMINI_API_KEY` | Yes | Google Gemini API key (images + vision) |
-| `DEEPSEEK_API_KEY` | No | DeepSeek API key (cheaper text tasks) |
-| `TEXT_LLM` | No | `"deepseek"` (default) or `"gemini"` |
-| `MONGODB_URI` | No | MongoDB connection string |
-| `MONGODB_DB` | No | Database name (default: `picture_book_generator`) |
 
 ## MongoDB MCP Integration (MongoDB Partner Track)
 
@@ -300,9 +139,8 @@ hackathon requirement to integrate a partner's MCP server.
 launched on demand via `npx mongodb-mcp-server`, configured by
 `MDB_MCP_CONNECTION_STRING`.)
 
-**Read path** — `AnalyzerAgent.load_preprocess()` loads all preprocess
-documents through the MCP `find` tool, with a pymongo / local-file fallback
-for resilience.
+**Read path** — the Analyzer agent loads all preprocess documents through the
+MCP `find` tool, with a pymongo / local-file fallback for resilience.
 
 **Write path — the Character Consistency Hub** — After character reference
 sheets are generated, each character's visual identity (reference-sheet path,
@@ -325,12 +163,107 @@ MCP on every page) is what makes it reliable.
 **Future work** — aggregation queries over `segments` (character co-occurrence,
 scene frequency) to drive richer generation decisions.
 
-## MongoDB Collections
+### MongoDB Collections
 
 | Collection | Contents |
 |------------|----------|
 | `books` | Book metadata (title, chapters, status) |
-| `characters` | Character profiles (name, aliases, gender, appearance, sheet path) |
+| `characters` | Character profiles + visual identity (the consistency hub) |
 | `segments` | All segments (text, characters, actions, background, sentiment) |
+| `preprocess_files` | Cached preprocess artifacts (chapters, analysis, locations…) |
 | `illustrations` | Generation records (segment, prompt, image path, version) |
 | `generation_log` | LLM call logs (model, input/output, tokens, duration) |
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|-----------|
+| Agent orchestration | **Google ADK** (`SequentialAgent`, 4 custom `BaseAgent` stages) |
+| Text analysis & writing | **Gemini 3.5 Flash** on Vertex AI |
+| Image generation | **Gemini 3.1 Flash Image** on Vertex AI |
+| Quality check | Gemini vision (same models) |
+| Data layer | **MongoDB Atlas via the official MCP server** (read + write) + JSON fallback |
+| Text segmentation | TextTiling algorithm (deterministic; LLM only annotates) |
+| PDF export | ReportLab (8.5 × 8.5″ square format) |
+| Backend | FastAPI + uvicorn |
+| Frontend | Next.js 15 + Tailwind CSS |
+| Deployment | Cloud Run (single container) + Cloud Build CI + GCS volume for generated assets |
+
+## API Surface (selected)
+
+```
+POST   /api/generate, /api/generate/upload, /api/fetch-url   # create a book
+GET    /api/books, /api/books/preprocessed                   # library
+GET    /api/book/{id}/preprocess/{chapters|characters|locations|progress}
+PUT    /api/book/{id}/preprocess/characters/{name}           # edit character identity
+PUT    /api/book/{id}/preprocess/scenes/{name}               # edit location profile
+POST   /api/book/{id}/chapter/{ch}/generate                  # run the ADK pipeline
+GET    /api/book/{id}/chapter/{ch}/{progress|agent-log|stale-pages|consistency}
+POST   /api/book/{id}/segment/{seg}/{regenerate|quality|simplify|background|chat}
+POST   /api/book/{id}/characters/{name}/{regenerate|quality} # sheets + auto QC
+POST   /api/book/{id}/scenes/{name}/regenerate               # scene reference images
+POST   /api/book/{id}/special/{page_type}/regenerate         # covers, chapter pages
+```
+
+## Project Structure
+
+```
+picture_book_generator/
+├── src/
+│   ├── app.py                  # FastAPI setup + router mounting
+│   ├── config.py               # Models, backends, styles, BYOK gate
+│   ├── gemini_backend.py       # Vertex-AI / API-key client factory (+ per-request BYOK)
+│   ├── agents/                 # ★ ADK pipeline
+│   │   ├── adk_pipeline.py     #   SequentialAgent + 4 BaseAgent stages
+│   │   ├── analyzer.py / writer.py / artist.py / qa.py
+│   │   └── agent_log.py        #   live activity log for the editor
+│   ├── core/                   # db.py (MongoDB), mcp_client.py (MCP stdio), models
+│   ├── preprocessing/          # 6-layer preprocess pipeline
+│   ├── analysis/               # TextTiling segmentation, complexity scoring
+│   ├── generation/             # illustration, character/scene sheets, QC, special pages
+│   ├── extraction/             # text input parsing
+│   ├── renderer/               # PDF export
+│   └── routes/                 # books / editor / generation endpoints
+├── scripts/                    # preprocess_book.py, generate_chapter.py (CLI)
+├── frontend/src/               # Next.js app (editor, reader, library)
+├── cloudbuild.yaml             # git push main → build + deploy to Cloud Run
+└── data/                       # generated output (GCS volume in production)
+```
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GEMINI_BACKEND` | `vertex` | `vertex` (ADC / service account) or `api_key` (AI Studio) |
+| `GCP_PROJECT` | `picture-book-gen` | GCP project for Vertex AI |
+| `GCP_LOCATION` | `global` | Vertex location (Gemini 3 requires `global`) |
+| `GEMINI_MODEL` | `gemini-3.5-flash` | Text/vision model |
+| `GEMINI_IMAGE_MODEL` | `gemini-3.1-flash-image` | Image model |
+| `GEMINI_API_KEY` | — | Only needed when `GEMINI_BACKEND=api_key` |
+| `REQUIRE_USER_KEY` | `false` | When `true`, generation endpoints require the caller to bring their own Gemini key (BYOK) — public deployments can't bill the project key |
+| `MONGODB_URI` / `MDB_MCP_CONNECTION_STRING` | — | MongoDB Atlas connection (driver fallback / MCP server) |
+| `MONGODB_DB` | `picture_book_generator` | Database name |
+| `APP_ENV` | `test` | `production` = Gemini for everything; `test` = cheaper third-party models for local iteration |
+
+## Key Design Decisions
+
+- **One real pipeline, agent-orchestrated** — the ADK `SequentialAgent` *is* the production path (no demo-only agent), running in-process because image generation is too heavy to ship to a remote agent runtime.
+- **MongoDB MCP as the consistency hub** — character visual identity lives in one canonical place, read via MCP on every page generation.
+- **LLM-first analysis, algorithmic segmentation** — LLM identifies characters/aliases/locations; TextTiling does the splitting (deterministic), LLM only annotates.
+- **Preprocess once, generate many** — full-book analysis is cached (MongoDB + files); chapter generation loads from cache.
+- **Every page gets art, QA gates it** — all segments are illustrated (no filtering); a 5-dimension vision check with self-correction keeps quality up.
+- **BYOK-ready** — a per-request user API key (HTTP header) always beats the server key, so the public demo can run without billing the project.
+
+---
+
+## License
+
+This project is **open source** under the **[GNU AGPL-3.0](LICENSE)**.
+
+You are free to use, study, modify, and redistribute it, including running it
+as a network service — provided derivative works and hosted modifications are
+also published under AGPL-3.0. For commercial licensing outside the AGPL terms,
+contact the author.
+
+Built for the **Google Cloud Rapid Agent Hackathon 2026** (MongoDB track) with
+Google ADK · Gemini 3 on Vertex AI · MongoDB MCP.
