@@ -7,15 +7,21 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from src.config import GENERATED_DIR
-from src.routes.helpers import _load_json, _save_json
+from src.routes.helpers import _load_json, _require_user_key, _save_json
 from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Chapters currently generating (book_id, ch_idx). Prevents a second subprocess
+# from being spawned for a chapter that's already running (which would double-hit
+# Gemini and race on progress.json / agent_log.json). Single-instance scope —
+# matches the Cloud Run min-instances=1 deployment.
+_active_generations: set[tuple[str, int]] = set()
 
 
 @router.get("/api/book/{book_id}/chapter/{ch_idx}/agent-log")
@@ -91,7 +97,8 @@ async def get_stale_pages(book_id: str, ch_idx: int) -> dict[str, Any]:
 
 @router.post("/api/book/{book_id}/segment/{seg_id}/regenerate")
 async def regenerate_segment_illustration(
-    book_id: str, seg_id: int, background_tasks: BackgroundTasks
+    book_id: str, seg_id: int, background_tasks: BackgroundTasks,
+    user_key: str = Depends(_require_user_key),
 ) -> dict[str, Any]:
     """Regenerate illustration for a single segment."""
     analysis = _load_json(book_id, "analysis.json")
@@ -169,7 +176,7 @@ async def regenerate_segment_illustration(
                         break
 
         if chars_to_generate:
-            new_sheets = generate_character_sheets(chars_to_generate, book_id)
+            new_sheets = await run_in_threadpool(generate_character_sheets, chars_to_generate, book_id)
             character_sheets.extend(new_sheets)
 
         # Step 2: Simplify text if not done yet
@@ -181,7 +188,7 @@ async def regenerate_segment_illustration(
                 "key_characters": target.get("characters_in_scene", []),
                 "scene_summary": target.get("scene_summary", ""),
             }
-            result = simplify_text([scene], "4-6")
+            result = await run_in_threadpool(simplify_text, [scene], "4-6")
             if result:
                 simplified_text = result[0].get("page_text", "")
                 scene_direction = result[0].get("scene_direction", "")
@@ -201,18 +208,17 @@ async def regenerate_segment_illustration(
             "character_actions": target.get("character_actions", []),
         }
 
-        generate_illustrations(
+        await run_in_threadpool(
+            generate_illustrations,
             [page_prompt], character_sheets, book_id,
             pages_dir=str(ch_dir),
         )
         logger.info("Regeneration complete for segment %d (page %d)", seg_id, page_num)
 
-        # Auto quality check on the freshly generated page, with bounded
-        # self-correction: score < 50 -> one retry with QA feedback, keep
-        # whichever image scores higher
+        # Auto QA + bounded self-correction via the SHARED page service — same
+        # policy/threshold the pipeline uses; the frontend only triggers regen.
         try:
-            import shutil
-            from src.generation.gemini_consistency_check import check_page_quality
+            from src.generation.page_service import qa_and_self_correct
 
             def _find_page_image() -> str:
                 for ext in (".png", ".jpg"):
@@ -221,55 +227,25 @@ async def regenerate_segment_illustration(
                         return str(img)
                 return ""
 
-            def _run_quality(path: str) -> dict:
-                res = check_page_quality(
-                    path, character_sheets,
-                    simplified_text or target.get("text", ""),
-                    target.get("characters_in_scene", []), page_num,
-                )
-                res["page"] = page_num
-                res["segment_id"] = seg_id
-                return res
-
             ill_path = _find_page_image()
             if ill_path:
-                q_result = await run_in_threadpool(_run_quality, ill_path)
-                feedback = q_result.get("regeneration_feedback", "")
-                old_score = q_result.get("overall_score", 100)
-                if old_score < 50 and feedback:
-                    logger.info("Self-correct: segment %d scored %d, retrying with QA feedback",
-                                seg_id, old_score)
-                    bad = Path(ill_path)
-                    backup = history_dir / f"{bad.stem}_selfcorrect_prev{bad.suffix}"
-                    # Move aside so the generation checkpoint doesn't skip
-                    shutil.move(str(bad), backup)
-                    await run_in_threadpool(
-                        generate_illustrations, [page_prompt], character_sheets, book_id,
-                        None, str(ch_dir), feedback,
+                def _regen_fn(feedback: str) -> str:
+                    generate_illustrations(
+                        [page_prompt], character_sheets, book_id, None, str(ch_dir), feedback,
                     )
-                    new_path = _find_page_image()
-                    if not new_path:
-                        shutil.copy2(backup, bad)
-                        q_result["self_correct_attempted"] = True
-                    else:
-                        new_result = await run_in_threadpool(_run_quality, new_path)
-                        new_score = new_result.get("overall_score", 0)
-                        kept_new = new_score >= old_score
-                        if not kept_new:
-                            Path(new_path).unlink(missing_ok=True)
-                            shutil.copy2(backup, bad)
-                        q_result = new_result if kept_new else q_result
-                        q_result["self_correct_attempted"] = True
-                        q_result["self_correct"] = {
-                            "old_score": old_score, "new_score": new_score,
-                            "kept": "new" if kept_new else "old",
-                        }
-                        logger.info("Self-correct: segment %d %d%% -> %d%%, kept %s",
-                                    seg_id, old_score, new_score, "new" if kept_new else "old")
-                q_dir = ch_base / "quality"
-                q_dir.mkdir(parents=True, exist_ok=True)
-                (q_dir / f"page_{page_num:03d}_quality.json").write_text(
-                    json.dumps(q_result, indent=2, default=str, ensure_ascii=False), encoding="utf-8"
+                    return _find_page_image()
+
+                await run_in_threadpool(
+                    qa_and_self_correct,
+                    image_path=ill_path,
+                    character_sheets=character_sheets,
+                    expected_text=simplified_text or target.get("text", ""),
+                    expected_characters=target.get("characters_in_scene", []),
+                    page_num=page_num,
+                    seg_id=seg_id,
+                    history_dir=history_dir,
+                    quality_path=ch_base / "quality" / f"page_{page_num:03d}_quality.json",
+                    regenerate_fn=_regen_fn,
                 )
                 logger.info("Auto quality check done for segment %d", seg_id)
         except Exception as e:
@@ -286,6 +262,15 @@ async def regenerate_segment_illustration(
         except Exception as e:
             logger.warning("MongoDB sync failed for segment %d: %s", seg_id, e)
 
+        # The page image changed — the chapter-level consistency.json (served
+        # verbatim by GET /chapter/{ch}/consistency) is stale now; drop it.
+        try:
+            consistency_path = ch_base / "consistency.json"
+            if consistency_path.exists():
+                consistency_path.unlink()
+        except OSError:
+            pass
+
         # Write completion marker
         import time as _t
         marker = ch_base / f"regen_{seg_id}.json"
@@ -296,7 +281,33 @@ async def regenerate_segment_illustration(
     if marker.exists():
         marker.unlink()
 
-    background_tasks.add_task(_regen)
+    async def _regen_safe():
+        from src.gemini_backend import set_user_api_key, reset_user_api_key
+        # BYOK — route this task's Gemini calls to the user's key, and reset the
+        # contextvar afterwards so the key doesn't leak into the worker context.
+        token = set_user_api_key(user_key)
+        try:
+            await _regen()
+        except Exception as e:
+            # Without this, any exception left no completion marker → the status
+            # endpoint returned "generating" forever and the page image (already
+            # moved to history) stayed blank. Restore it + write an error marker.
+            logger.exception("Regen failed for segment %d", seg_id)
+            try:
+                import shutil as _sh
+                for ext in (".png", ".jpg"):
+                    h = history_dir / f"page_{page_num:03d}_{ts}{ext}"
+                    if h.exists():
+                        _sh.copy2(h, ch_dir / f"page_{page_num:03d}{ext}")
+                        break
+            except Exception:
+                pass
+            (ch_base / f"regen_{seg_id}.json").write_text(json.dumps(
+                {"status": "error", "segment_id": seg_id, "error": str(e)[:300]}))
+        finally:
+            reset_user_api_key(token)
+
+    background_tasks.add_task(_regen_safe)
 
     return {"status": "regenerating", "segment_id": seg_id, "page_number": page_num}
 
@@ -320,12 +331,19 @@ async def get_regen_status(book_id: str, seg_id: int) -> dict[str, Any]:
 
 @router.post("/api/book/{book_id}/chapter/{ch_idx}/generate")
 async def generate_chapter_endpoint(
-    book_id: str, ch_idx: int, background_tasks: BackgroundTasks
+    book_id: str, ch_idx: int, background_tasks: BackgroundTasks,
+    user_key: str = Depends(_require_user_key),
 ) -> dict[str, Any]:
     """Generate illustrations for a chapter (text simplification + illustration)."""
     preprocess_dir = GENERATED_DIR / book_id / "preprocess"
     if not preprocess_dir.exists():
         raise HTTPException(status_code=404, detail="No preprocess data. Run preprocess first.")
+
+    # Refuse to start a second subprocess for a chapter already generating.
+    key = (book_id, ch_idx)
+    if key in _active_generations:
+        return {"status": "already_generating", "book_id": book_id, "chapter": ch_idx}
+    _active_generations.add(key)
 
     # Initialize progress file
     progress_file = GENERATED_DIR / book_id / "chapters" / f"ch{ch_idx:02d}" / "progress.json"
@@ -334,27 +352,39 @@ async def generate_chapter_endpoint(
 
     async def _gen():
         import asyncio as _asyncio
+        import os
         import sys
-        proc = await _asyncio.create_subprocess_exec(
-            sys.executable, "scripts/generate_chapter.py", "--book", book_id, "--chapter", str(ch_idx),
-            cwd=str(Path(__file__).parent.parent.parent),
-            stdout=_asyncio.subprocess.PIPE,
-            stderr=_asyncio.subprocess.PIPE,
-        )
+        env = os.environ.copy()
+        if user_key:  # BYOK — bill the user's key; else fall back to project Vertex
+            env["GEMINI_API_KEY"] = user_key
+            env["GEMINI_BACKEND"] = "api_key"
         try:
-            _stdout, _stderr = await _asyncio.wait_for(proc.communicate(), timeout=900)
-        except _asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
-            logger.error("Chapter generation timed out for %s ch%02d", book_id, ch_idx)
-            progress_file.write_text(json.dumps({"status": "failed", "progress": 100, "current_step": "Generation timed out", "total_pages": 0, "completed_pages": 0}))
-            return
-        if proc.returncode == 0:
-            progress_file.write_text(json.dumps({"status": "complete", "progress": 100, "current_step": "Done", "total_pages": 0, "completed_pages": 0}))
-        else:
-            err_tail = (_stderr or b"").decode("utf-8", errors="replace")[-800:]
-            logger.error("Chapter generation failed for %s ch%02d: %s", book_id, ch_idx, err_tail)
-            progress_file.write_text(json.dumps({"status": "failed", "progress": 100, "current_step": "Generation failed", "total_pages": 0, "completed_pages": 0, "error": err_tail}))
+            proc = await _asyncio.create_subprocess_exec(
+                # --self-correct: without it the QA stage is report-only — a
+                # failing page is still marked complete and never retried.
+                sys.executable, "scripts/generate_chapter.py", "--book", book_id, "--chapter", str(ch_idx),
+                "--self-correct",
+                cwd=str(Path(__file__).parent.parent.parent),
+                stdout=_asyncio.subprocess.PIPE,
+                stderr=_asyncio.subprocess.PIPE,
+                env=env,
+            )
+            try:
+                _stdout, _stderr = await _asyncio.wait_for(proc.communicate(), timeout=900)
+            except _asyncio.TimeoutError:
+                proc.kill()
+                await proc.communicate()
+                logger.error("Chapter generation timed out for %s ch%02d", book_id, ch_idx)
+                progress_file.write_text(json.dumps({"status": "failed", "progress": 100, "current_step": "Generation timed out", "total_pages": 0, "completed_pages": 0}))
+                return
+            if proc.returncode == 0:
+                progress_file.write_text(json.dumps({"status": "complete", "progress": 100, "current_step": "Done", "total_pages": 0, "completed_pages": 0}))
+            else:
+                err_tail = (_stderr or b"").decode("utf-8", errors="replace")[-800:]
+                logger.error("Chapter generation failed for %s ch%02d: %s", book_id, ch_idx, err_tail)
+                progress_file.write_text(json.dumps({"status": "failed", "progress": 100, "current_step": "Generation failed", "total_pages": 0, "completed_pages": 0, "error": err_tail}))
+        finally:
+            _active_generations.discard(key)
 
     background_tasks.add_task(_gen)
     return {"status": "generating", "book_id": book_id, "chapter": ch_idx}
@@ -368,11 +398,35 @@ async def get_chapter_progress(book_id: str, ch_idx: int) -> dict[str, Any]:
     analysis = _load_json(book_id, "analysis.json")
     total = 0
     if analysis:
-        total = sum(1 for s in analysis.get("segments", []) if s.get("chapter_idx") == ch_idx)
+        # Count only segments that actually become pages. build_scenes() skips
+        # segments under 10 words, so counting every segment makes `total`
+        # larger than the page files that ever get generated, and the
+        # "completed >= total" completion shortcut below could never fire.
+        total = sum(
+            1 for s in analysis.get("segments", [])
+            if s.get("chapter_idx") == ch_idx
+            and len((s.get("text") or "").split()) >= 10
+        )
 
     completed = len(list(ch_dir.glob("page_*.*"))) if ch_dir.exists() else 0
 
-    # If all pages exist, it's complete regardless of progress.json
+    # Consult progress.json FIRST: when an already-complete chapter is being
+    # re-generated, the old page files still exist, so the file-count shortcut
+    # below would instantly (and wrongly) report "complete" for the new run.
+    progress_data = None
+    progress_file = GENERATED_DIR / book_id / "chapters" / f"ch{ch_idx:02d}" / "progress.json"
+    if progress_file.exists():
+        try:
+            progress_data = json.loads(progress_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            progress_data = None
+    if progress_data is not None and progress_data.get("status") in ("starting", "generating"):
+        # In-flight run — report its live status, with actual file counts.
+        progress_data["completed_pages"] = completed
+        progress_data["total_pages"] = total
+        return progress_data
+
+    # No in-flight run: if all pages exist, it's complete regardless of progress.json
     if completed >= total and total > 0:
         return {
             "status": "complete", "progress": 100,
@@ -380,17 +434,11 @@ async def get_chapter_progress(book_id: str, ch_idx: int) -> dict[str, Any]:
             "total_pages": total, "completed_pages": completed,
         }
 
-    # Check progress.json for live updates during generation
-    progress_file = GENERATED_DIR / book_id / "chapters" / f"ch{ch_idx:02d}" / "progress.json"
-    if progress_file.exists():
-        try:
-            data = json.loads(progress_file.read_text())
-            # Override with actual file count for accuracy
-            data["completed_pages"] = completed
-            data["total_pages"] = total
-            return data
-        except (json.JSONDecodeError, OSError):
-            pass
+    if progress_data is not None:
+        # Terminal status (complete/failed) — override with actual file count for accuracy
+        progress_data["completed_pages"] = completed
+        progress_data["total_pages"] = total
+        return progress_data
 
     if not ch_dir.exists() or completed == 0:
         return {"status": "not_started", "progress": 0, "current_step": "Not started", "total_pages": total, "completed_pages": 0}
@@ -638,6 +686,7 @@ async def check_chapter_consistency(book_id: str, ch_idx: int) -> dict[str, Any]
 async def regenerate_special_page(
     book_id: str, page_type: str, background_tasks: BackgroundTasks,
     chapter: int = 0,
+    user_key: str = Depends(_require_user_key),
 ) -> dict[str, Any]:
     """Regenerate a special page (book_cover, chapter_cover, chapter_ending, back_cover)."""
     from src.generation.special_pages import (
@@ -660,25 +709,59 @@ async def regenerate_special_page(
     llm_chars = _load_json(book_id, "llm_characters.json") or {}
     characters = llm_chars.get("characters", [])
 
-    async def _gen():
+    async def _gen_inner():
         if page_type == "book_cover":
             char_profiles = [{"name": c["canonical_name"], "visual_identity": c.get("appearance", "")} for c in characters[:5]]
-            generate_book_cover(title, char_profiles, book_id, character_sheets=character_sheets)
+            await run_in_threadpool(generate_book_cover, title, char_profiles, book_id, character_sheets=character_sheets)
         elif page_type == "chapter_cover":
             ch_info = ch_segments.get(str(chapter), {})
             ch_title = ch_info.get("chapter_title", f"Chapter {chapter + 1}")
             ch_summary = ch_info.get("chapter_summary", "")
             char_profiles = [{"name": c["canonical_name"], "visual_identity": c.get("appearance", "")} for c in characters[:3]]
-            generate_chapter_cover(ch_title, chapter, ch_summary, char_profiles, book_id, character_sheets=character_sheets)
+            # Pass 1-based chapter number to match the pipeline/PDF file naming.
+            await run_in_threadpool(generate_chapter_cover, ch_title, chapter + 1, ch_summary, char_profiles, book_id, character_sheets=character_sheets)
         elif page_type == "chapter_ending":
             ch_info = ch_segments.get(str(chapter), {})
             ch_title = ch_info.get("chapter_title", f"Chapter {chapter + 1}")
             char_profiles = [{"name": c["canonical_name"], "visual_identity": c.get("appearance", "")} for c in characters[:3]]
-            generate_chapter_ending(ch_title, chapter, "", char_profiles, book_id, character_sheets=character_sheets)
+            await run_in_threadpool(generate_chapter_ending, ch_title, chapter + 1, "", char_profiles, book_id, character_sheets=character_sheets)
         elif page_type == "back_cover":
-            generate_back_cover(title, book_id, character_sheets=character_sheets)
+            await run_in_threadpool(generate_back_cover, title, book_id, character_sheets=character_sheets)
         else:
             logger.error("Unknown special page type: %s", page_type)
+
+    async def _gen():
+        from src.gemini_backend import set_user_api_key, reset_user_api_key
+        # BYOK — set the user's key for this task and reset afterwards so it
+        # doesn't leak into the worker context.
+        token = set_user_api_key(user_key)
+        try:
+            await _gen_inner()
+        finally:
+            reset_user_api_key(token)
+
+    # Move the existing image aside FIRST (like the other regens) so the frontend's
+    # "url appeared" completion check waits for the NEW image instead of instantly
+    # "completing" on the unchanged old one ("regenerated but nothing changed").
+    _base = {
+        "book_cover": "book_cover",
+        "chapter_cover": f"chapter_{chapter + 1:02d}_cover",
+        "chapter_ending": f"chapter_{chapter + 1:02d}_ending",
+        "back_cover": "back_cover",
+    }.get(page_type)
+    if _base:
+        special_dir = GENERATED_DIR / book_id / "special"
+        hist = special_dir / "history"
+        hist.mkdir(parents=True, exist_ok=True)
+        import time as _t
+        _ts = int(_t.time())
+        for _ext in (".png", ".jpg"):
+            _old = special_dir / f"{_base}{_ext}"
+            if _old.exists():
+                try:
+                    _old.rename(hist / f"{_base}_{_ts}{_ext}")
+                except OSError:
+                    pass
 
     background_tasks.add_task(_gen)
     return {"status": "generating", "page_type": page_type, "chapter": chapter}
@@ -686,7 +769,8 @@ async def regenerate_special_page(
 
 @router.post("/api/book/{book_id}/scenes/{scene_name}/regenerate")
 async def regenerate_scene_sheet(
-    book_id: str, scene_name: str, background_tasks: BackgroundTasks
+    book_id: str, scene_name: str, background_tasks: BackgroundTasks,
+    user_key: str = Depends(_require_user_key),
 ) -> dict[str, Any]:
     """Generate/regenerate a scene reference image for a location."""
     import re as _re
@@ -708,7 +792,7 @@ async def regenerate_scene_sheet(
         if old.exists():
             old.rename(history_dir / f"{safe}_scene_{ts}{ext}")
 
-    async def _gen():
+    async def _gen_inner():
         from src.config import IMAGE_LLM, DEFAULT_STYLE, NEGATIVE_PROMPT
 
         # Load location details
@@ -740,27 +824,41 @@ async def regenerate_scene_sheet(
             generate_image_alicloud(prompt, out_path)
             return
 
-        from google import genai
-        from src.config import GEMINI_IMAGE_MODEL
-        from src.gemini_backend import make_genai_client
-        client = make_genai_client()
+        def _gen_scene_image():
+            from google import genai
+            from src.config import GEMINI_IMAGE_MODEL
+            from src.gemini_backend import make_genai_client
+            client = make_genai_client()
+            try:
+                response = client.models.generate_content(
+                    model=GEMINI_IMAGE_MODEL,
+                    contents=prompt,
+                    config=genai.types.GenerateContentConfig(
+                        response_modalities=["IMAGE", "TEXT"],
+                    ),
+                )
+                for part in response.candidates[0].content.parts:
+                    if part.inline_data and part.inline_data.mime_type.startswith("image/"):
+                        ext = ".png" if "png" in part.inline_data.mime_type else ".jpg"
+                        out_path = scenes_dir / f"{safe}_scene{ext}"
+                        out_path.write_bytes(part.inline_data.data)
+                        logger.info("Scene sheet saved: %s", out_path)
+                        break
+            except Exception as e:
+                logger.error("Scene generation failed for %s: %s", scene_name, e)
+
+        # Run the blocking Gemini call off the event loop.
+        await run_in_threadpool(_gen_scene_image)
+
+    async def _gen():
+        from src.gemini_backend import set_user_api_key, reset_user_api_key
+        # BYOK — set the user's key for this task and reset afterwards so it
+        # doesn't leak into the worker context.
+        token = set_user_api_key(user_key)
         try:
-            response = client.models.generate_content(
-                model=GEMINI_IMAGE_MODEL,
-                contents=prompt,
-                config=genai.types.GenerateContentConfig(
-                    response_modalities=["IMAGE", "TEXT"],
-                ),
-            )
-            for part in response.candidates[0].content.parts:
-                if part.inline_data and part.inline_data.mime_type.startswith("image/"):
-                    ext = ".png" if "png" in part.inline_data.mime_type else ".jpg"
-                    out_path = scenes_dir / f"{safe}_scene{ext}"
-                    out_path.write_bytes(part.inline_data.data)
-                    logger.info("Scene sheet saved: %s", out_path)
-                    break
-        except Exception as e:
-            logger.error("Scene generation failed for %s: %s", scene_name, e)
+            await _gen_inner()
+        finally:
+            reset_user_api_key(token)
 
     background_tasks.add_task(_gen)
     return {"status": "generating", "scene": scene_name}
@@ -806,7 +904,8 @@ def _run_character_sheet_quality(book_id: str, char_name: str) -> dict | None:
 
 @router.post("/api/book/{book_id}/characters/{char_name}/regenerate")
 async def regenerate_character_sheet(
-    book_id: str, char_name: str, background_tasks: BackgroundTasks
+    book_id: str, char_name: str, background_tasks: BackgroundTasks,
+    user_key: str = Depends(_require_user_key),
 ) -> dict[str, Any]:
     """Regenerate character sheet for a specific character."""
     from src.generation.character_sheet import _safe_filename
@@ -823,7 +922,7 @@ async def regenerate_character_sheet(
         if old.exists():
             old.rename(history_dir / f"{safe}_sheet_{ts}{ext}")
 
-    async def _regen():
+    async def _regen_inner():
         from src.generation.character_sheet import generate_character_sheets
         from src.routes.helpers import load_characters
         characters = load_characters(book_id)
@@ -842,12 +941,22 @@ async def regenerate_character_sheet(
                 break
 
         if profile:
-            generate_character_sheets([profile], book_id)
+            await run_in_threadpool(generate_character_sheets, [profile], book_id)
             # Auto-run the quality check on every freshly generated sheet.
             try:
                 _run_character_sheet_quality(book_id, char_name)
             except Exception as e:
                 logger.warning("Auto quality-check failed for %s: %s", char_name, e)
+
+    async def _regen():
+        from src.gemini_backend import set_user_api_key, reset_user_api_key
+        # BYOK — set the user's key for this task and reset afterwards so it
+        # doesn't leak into the worker context.
+        token = set_user_api_key(user_key)
+        try:
+            await _regen_inner()
+        finally:
+            reset_user_api_key(token)
 
     background_tasks.add_task(_regen)
     return {"status": "regenerating", "character": char_name}

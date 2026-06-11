@@ -7,9 +7,28 @@ import logging
 import threading
 from typing import Any
 
+from fastapi import Header, HTTPException
+
 from src.config import GENERATED_DIR
 
 logger = logging.getLogger(__name__)
+
+
+def _require_user_key(x_gemini_key: str | None = Header(default=None)) -> str | None:
+    """BYOK gate (only enforced when REQUIRE_USER_KEY=true).
+
+    Enforced: generating/regenerating needs the caller's own Gemini key (403
+    otherwise) so public users can't bill the project. Not enforced: the key is
+    optional — if present it's honored (user's billing), else generation falls
+    back to the project backend (Vertex). Returns the key, or None.
+    """
+    from src.config import REQUIRE_USER_KEY
+    if REQUIRE_USER_KEY and not x_gemini_key:
+        raise HTTPException(
+            status_code=403,
+            detail="A Gemini API key is required to generate. Add yours on the Create page.",
+        )
+    return x_gemini_key
 
 _file_locks: dict[str, threading.Lock] = {}
 _locks_lock = threading.Lock()

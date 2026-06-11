@@ -163,7 +163,7 @@ def check_page_quality(
     parts.append({"text": "[PAGE ILLUSTRATION to check]"})
     ill_part = _load_image_part(illustration_path)
     if not ill_part:
-        return _empty_page_quality()
+        return {**_empty_page_quality(), "qa_failed": True}
     parts.append(ill_part)
 
     # Add character sheets
@@ -246,7 +246,7 @@ Return JSON:
                 response_mime_type="application/json",
             ),
         )
-        result = _json.loads(response.text)
+        result = _normalize_page_quality(_json.loads(response.text))
 
         logger.info(
             "Page %d quality check: overall=%s, char=%s, spell=%s, dup=%s, name=%s, count=%s",
@@ -263,7 +263,7 @@ Return JSON:
 
     except Exception as e:
         logger.warning("Page %d quality check failed: %s", page_num, e)
-        return _empty_page_quality()
+        return {**_empty_page_quality(), "qa_failed": True}
 
 
 def check_character_sheet_quality(
@@ -424,6 +424,59 @@ def _empty_page_quality() -> dict:
         "character_count": {"score": 100, "expected": 0, "found": 0, "missing": [], "extra": []},
         "regeneration_feedback": "",
     }
+
+
+_PAGE_QUALITY_DIMENSIONS = (
+    "character_consistency",
+    "spelling",
+    "duplicate_characters",
+    "name_face_mismatch",
+    "character_count",
+)
+
+
+def _coerce_score(value) -> int:
+    """Coerce an LLM-provided score into an int in [0, 100], default 100."""
+    try:
+        s = int(round(float(value)))
+    except (TypeError, ValueError):
+        return 100
+    return max(0, min(100, s))
+
+
+def _normalize_page_quality(result: dict) -> dict:
+    """Make a page-quality result internally consistent for the UI.
+
+    The model frequently returns a headline `overall_score` that disagrees with
+    the per-dimension scores (e.g. overall 40% while every dimension is 100% or
+    has no score at all — which renders as all-green badges plus a blank
+    "Char Count"). We coerce every dimension score to a valid int and recompute
+    `overall_score` as the mean of the five dimensions, so the number shown at
+    the top always matches the rows beneath it.
+    """
+    if not isinstance(result, dict):
+        return {**_empty_page_quality(), "qa_failed": True}
+
+    scores = []
+    for dim in _PAGE_QUALITY_DIMENSIONS:
+        block = result.get(dim)
+        if not isinstance(block, dict):
+            block = {}
+            result[dim] = block
+        block["score"] = _coerce_score(block.get("score"))
+        scores.append(block["score"])
+
+    # Ensure the list fields the frontend reads always exist.
+    result["character_consistency"].setdefault("characters", [])
+    result["spelling"].setdefault("errors", [])
+    result["duplicate_characters"].setdefault("duplicates", [])
+    result["name_face_mismatch"].setdefault("mismatches", [])
+    result["character_count"].setdefault("missing", [])
+    result["character_count"].setdefault("extra", [])
+    result.setdefault("regeneration_feedback", "")
+
+    result["overall_score"] = round(sum(scores) / len(scores)) if scores else 100
+    return result
 
 
 def check_style_consistency(

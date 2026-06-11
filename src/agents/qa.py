@@ -163,28 +163,32 @@ class QAAgent:
             # Style coherence
             style_result = self.check_style_coherence(illustrations, chapter_dir)
 
-            # Dimension scores
-            n = max(len(self.per_page_results), 1)
+            # Dimension scores — skip qa_failed sentinel entries (their score
+            # 100 is a failure marker, not a real measurement).
+            scored = [r for r in self.per_page_results if not r.get("qa_failed")]
+            if not scored:
+                scored = self.per_page_results
+            n = max(len(scored), 1)
             dim_scores = {
                 "character_consistency": round(sum(
                     r.get("character_consistency", {}).get("score", 100)
-                    for r in self.per_page_results
+                    for r in scored
                 ) / n),
                 "spelling": round(sum(
                     r.get("spelling", {}).get("score", 100)
-                    for r in self.per_page_results
+                    for r in scored
                 ) / n),
                 "duplicate_characters": round(sum(
                     r.get("duplicate_characters", {}).get("score", 100)
-                    for r in self.per_page_results
+                    for r in scored
                 ) / n),
                 "name_face_mismatch": round(sum(
                     r.get("name_face_mismatch", {}).get("score", 100)
-                    for r in self.per_page_results
+                    for r in scored
                 ) / n),
                 "character_count": round(sum(
                     r.get("character_count", {}).get("score", 100)
-                    for r in self.per_page_results
+                    for r in scored
                 ) / n),
                 "style_coherence": style_result.get("score", 100),
             }

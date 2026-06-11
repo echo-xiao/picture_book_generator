@@ -24,6 +24,9 @@ export default function BookViewerPage() {
   const [pages, setPages] = useState<PageInfo[]>([]);
   const [currentPage, setCurrentPage] = useState(0);
   const [loading, setLoading] = useState(true);
+  // Bust the image cache once per page-load so edits made in the editor show up
+  // here instead of a stale browser-cached image (filenames are reused).
+  const [cacheBust] = useState(() => Date.now());
 
   useEffect(() => {
     async function load() {
@@ -120,8 +123,10 @@ export default function BookViewerPage() {
           <span className="text-white/50 text-xs">
             {currentPage + 1} / {pages.length}
           </span>
+          {/* Full navigation: the editor reads window.location.search in useState
+              initializers, which a soft router.push would leave stale. */}
           <button
-            onClick={() => router.push(`/editor/${bookId}?ch=${page.chapter_idx}&seg=${page.segment_id}&tab=pages`)}
+            onClick={() => window.location.assign(`/editor/${bookId}?ch=${page.chapter_idx}&seg=${page.segment_id}&tab=pages`)}
             className="text-xs bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1"
           >
             <Edit3 size={12} /> Edit
@@ -144,14 +149,15 @@ export default function BookViewerPage() {
         <div
           className="max-w-2xl w-full cursor-pointer group"
           onClick={() => {
-            // Click to go to editor for this specific segment
-            router.push(`/editor/${bookId}?ch=${page.chapter_idx}&seg=${page.segment_id}&tab=pages`);
+            // Click to go to editor for this specific segment (full navigation —
+            // the editor reads window.location.search in useState initializers)
+            window.location.assign(`/editor/${bookId}?ch=${page.chapter_idx}&seg=${page.segment_id}&tab=pages`);
           }}
           title="Click to edit this page"
         >
           <div className="relative">
             <img
-              src={`${API_BASE}${page.image_url}`}
+              src={`${API_BASE}${page.image_url}${page.image_url.includes("?") ? "&" : "?"}v=${cacheBust}`}
               alt={`Page ${currentPage + 1}`}
               className="w-full rounded-2xl shadow-2xl"
             />
@@ -192,7 +198,7 @@ export default function BookViewerPage() {
               }`}
             >
               <img
-                src={`${API_BASE}${p.image_url}`}
+                src={`${API_BASE}${p.image_url}${p.image_url.includes("?") ? "&" : "?"}v=${cacheBust}`}
                 alt={`Page ${idx + 1}`}
                 className="w-full h-full object-cover"
               />

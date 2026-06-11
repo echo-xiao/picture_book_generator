@@ -33,20 +33,6 @@ logging.basicConfig(
 )
 
 
-def _update_progress(book_id: str, chapter_idx: int, **kwargs) -> None:
-    """Write progress.json for frontend polling."""
-    progress_file = GENERATED_DIR / book_id / "chapters" / f"ch{chapter_idx:02d}" / "progress.json"
-    progress_file.parent.mkdir(parents=True, exist_ok=True)
-    existing = {}
-    if progress_file.exists():
-        try:
-            existing = json.loads(progress_file.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
-    existing.update(kwargs)
-    progress_file.write_text(json.dumps(existing))
-
-
 def generate_chapter(
     book_id: str,
     data: dict,

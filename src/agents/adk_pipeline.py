@@ -30,18 +30,8 @@ from src.config import GENERATED_DIR
 logger = logging.getLogger(__name__)
 
 
-def _update_progress(book_id: str, chapter_idx: int, **kwargs) -> None:
-    """Write progress.json for frontend polling."""
-    progress_file = GENERATED_DIR / book_id / "chapters" / f"ch{chapter_idx:02d}" / "progress.json"
-    progress_file.parent.mkdir(parents=True, exist_ok=True)
-    existing: dict = {}
-    if progress_file.exists():
-        try:
-            existing = json.loads(progress_file.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
-    existing.update(kwargs)
-    progress_file.write_text(json.dumps(existing))
+# Single shared progress writer (merge-write) — see src/agents/progress.py
+from src.agents.progress import update_progress as _update_progress
 
 
 class PipelineContext:
@@ -146,13 +136,13 @@ class ArtistSetupStage(_Stage):
             yield Event(author=self.name)
             return
 
-        _update_progress(c.book_id, c.chapter_idx, agent="artist", current_step="Generating special pages...", progress=10)
+        _update_progress(c.book_id, c.chapter_idx, agent="artist", current_step="Generating special pages...", progress=20)
         log_event(c.book_id, c.chapter_idx, "artist", "special_pages", "Generating cover & special pages")
         if not c.page_filter:
             c.artist.ensure_special_pages(c.data, c.chapter_idx, c.segments)
         log_event(c.book_id, c.chapter_idx, "artist", "special_pages", "Special pages ready", status="done")
 
-        _update_progress(c.book_id, c.chapter_idx, agent="artist", current_step="Generating character sheets...", progress=20)
+        _update_progress(c.book_id, c.chapter_idx, agent="artist", current_step="Generating character sheets...", progress=25)
         log_event(c.book_id, c.chapter_idx, "artist", "character_sheets",
                   f"Generating sheets for {len(c.chapter_profiles)} characters")
         c.character_sheets = c.artist.generate_character_sheets(c.chapter_profiles)
@@ -208,7 +198,9 @@ class IllustrateQAStage(_Stage):
         log_event(c.book_id, c.chapter_idx, "artist", "illustrate", f"Starting illustration of {total_pages} pages")
 
         def _progress_with_log(completed: int, step: str) -> None:
-            agent = "artist" if "Illustrat" in step else "qa"
+            # "QA checking page..." is the only QA step; everything else the
+            # artist emits ("Illustrating...", "Self-correcting...") is the artist.
+            agent = "qa" if "QA" in step else "artist"
             _update_progress(c.book_id, c.chapter_idx, agent=agent, current_step=step,
                              progress=40 + int(completed / max(total_pages, 1) * 50),
                              completed_pages=completed, total_pages=total_pages)
@@ -228,6 +220,7 @@ class IllustrateQAStage(_Stage):
         log_event(c.book_id, c.chapter_idx, "qa", "summarize", "Quality summary complete", status="done")
 
         c.chapter_data = self._save_chapter_data(c)
+        self._sync_text_to_analysis(c)
 
         if not c.page_filter:
             c.artist.ensure_ending_pages(c.data, c.chapter_idx, c.segments)
@@ -244,14 +237,36 @@ class IllustrateQAStage(_Stage):
             try:
                 chapter_data = json.loads(chapter_data_path.read_text(encoding="utf-8"))
                 pages = chapter_data.get("pages", [])
+                # Backfill page_number on legacy pages (saved before page_number
+                # was stored) from the image filename "page_NNN", so the
+                # match-by-number below works without a full chapter regen.
+                import re as _re
+                for p in pages:
+                    if "page_number" not in p:
+                        m = _re.search(r"page_(\d+)", p.get("image_path", "") or "")
+                        if m:
+                            p["page_number"] = int(m.group(1))
                 for idx, scene in enumerate(c.simplified):
                     ill = c.illustrations[idx] if idx < len(c.illustrations) else {}
                     pn = scene.get("page_number", 0)
-                    if 1 <= pn <= len(pages):
-                        pages[pn - 1] = {
-                            "text": scene.get("page_text", scene.get("text", "")),
-                            "image_path": ill.get("image_path", pages[pn - 1].get("image_path", "")),
-                        }
+                    # Match the existing entry by page_number, NOT by list index:
+                    # page_number can be non-contiguous (build_scenes skips short
+                    # segments), so pages[pn-1] would land on the wrong row — or out
+                    # of range and silently skip the update. Fall back to positional
+                    # index only for legacy chapter_data without page_number.
+                    match = next((j for j, p in enumerate(pages) if p.get("page_number") == pn), None)
+                    if match is None and 1 <= pn <= len(pages):
+                        match = pn - 1
+                    new_entry = {
+                        "text": scene.get("page_text", scene.get("text", "")),
+                        "image_path": ill.get("image_path", ""),
+                        "page_number": pn,
+                    }
+                    if match is not None:
+                        new_entry["image_path"] = ill.get("image_path", pages[match].get("image_path", ""))
+                        pages[match] = new_entry
+                    else:
+                        pages.append(new_entry)
             except (json.JSONDecodeError, OSError):
                 chapter_data = None
         if chapter_data is None:
@@ -261,10 +276,41 @@ class IllustrateQAStage(_Stage):
                 chapter_data["pages"].append({
                     "text": scene.get("page_text", scene.get("text", "")),
                     "image_path": ill.get("image_path", ""),
+                    "page_number": scene.get("page_number", idx + 1),
                 })
         chapter_data_path.write_text(
             json.dumps(chapter_data, indent=2, default=str, ensure_ascii=False), encoding="utf-8")
         return chapter_data
+
+    @staticmethod
+    def _sync_text_to_analysis(c: PipelineContext) -> None:
+        """Write the Writer's final page text back into analysis.json.
+
+        The reader and the QA endpoints take a page's text from analysis.json
+        `simplified_text`, which preprocess wrote long before the Writer ran —
+        without this sync the text shown (and QA-checked) beside an
+        illustration differs from the text actually painted into it.
+        """
+        try:
+            from src.routes.helpers import _load_json, _save_json
+            analysis = _load_json(c.book_id, "analysis.json")
+            if not analysis:
+                return
+            by_id = {s.get("id"): s for s in analysis.get("segments", [])}
+            changed = False
+            for scene in c.simplified:
+                seg = by_id.get(scene.get("source_segment_id"))
+                text = scene.get("page_text", "")
+                if seg is not None and text and seg.get("simplified_text") != text:
+                    seg["simplified_text"] = text
+                    if scene.get("scene_direction"):
+                        seg["scene_direction"] = scene["scene_direction"]
+                    changed = True
+            if changed:
+                _save_json(c.book_id, "analysis.json", analysis)
+                print(f"  analysis.json: synced page text for {len(c.simplified)} pages")
+        except Exception as e:
+            print(f"  analysis.json text sync skipped: {e}")
 
     @staticmethod
     def _save_to_mongo(c: PipelineContext) -> None:
@@ -285,8 +331,10 @@ class IllustrateQAStage(_Stage):
             )
             client.close()
             print("  MongoDB: saved")
-        except Exception:
-            pass
+        except Exception as e:
+            # Don't swallow silently — a failed save means the book reader / library
+            # will be missing this chapter, and you'd never know why.
+            print(f"  MongoDB: save FAILED for {c.book_id} ch{c.chapter_idx} — {e}")
 
 
 def build_pipeline(ctx: PipelineContext) -> SequentialAgent:

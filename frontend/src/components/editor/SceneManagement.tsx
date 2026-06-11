@@ -12,9 +12,10 @@ interface SceneManagementProps {
   initialScene?: string | null;
   onSelectScene?: (name: string) => void;
   onSceneRegen?: () => void;
+  canGenerate?: boolean;
 }
 
-export default function SceneManagement({ bookId, initialScene, onSelectScene, onSceneRegen }: SceneManagementProps) {
+export default function SceneManagement({ bookId, initialScene, onSelectScene, onSceneRegen, canGenerate = true }: SceneManagementProps) {
   const [locations, setLocations] = useState<any[]>([]);
   const [sceneSheets, setSceneSheets] = useState<Record<string, string>>({});
   const [selectedLoc, setSelectedLoc] = useState<string | null>(null);
@@ -69,25 +70,39 @@ export default function SceneManagement({ bookId, initialScene, onSelectScene, o
 
   const handleRegenerate = async () => {
     if (!selected) return;
-    const sceneName = selected.name;
-    setGenerating(sceneName);
+    const oldName = selected.name;
+    const newName = (editing._name ?? oldName).trim() || oldName;
+    const renamed = newName !== oldName;
+    setGenerating(newName);
     try {
       // Persist edited fields before regenerating.
       const { _name, _description, ...visualDetails } = editing;
       const updates: Record<string, unknown> = { visual_details: visualDetails };
-      if (_name !== undefined) updates.name = _name;
+      if (_name !== undefined) updates.name = newName;
       if (_description !== undefined) updates.description = _description;
-      await updateScene(bookId, sceneName, updates);
+      await updateScene(bookId, oldName, updates);
 
-      await regenerateSceneSheet(bookId, sceneName);
+      // On rename: refresh the locations list and switch selection to the new
+      // name UP FRONT, otherwise the left list / selectedLoc keep the old name
+      // and the poll below would query the old name forever (backend stored the
+      // sheet under the new name) and time out.
+      if (renamed) {
+        const fresh = await getLocations(bookId);
+        setLocations(fresh.locations || []);
+        setSceneSheets(fresh.scene_sheets || {});
+        setSelectedLoc(newName);
+      }
+
+      await regenerateSceneSheet(bookId, newName);
       // Poll until sheet appears instead of blindly waiting 30s
       await new Promise<void>((resolve) => {
         const poll = setInterval(async () => {
           try {
-            const hist = await getSceneSheetHistory(bookId, sceneName);
+            const hist = await getSceneSheetHistory(bookId, newName);
             if (hist.images?.some(img => img.version === "current")) {
               clearInterval(poll);
               const data = await getLocations(bookId);
+              setLocations(data.locations || []);
               setSceneSheets(data.scene_sheets || {});
               setSceneCacheBust(Date.now());
               setGenerating(null);
@@ -97,7 +112,7 @@ export default function SceneManagement({ bookId, initialScene, onSelectScene, o
         }, 5000);
         setTimeout(() => { clearInterval(poll); setGenerating(null); resolve(); }, 120000);
       });
-      onSceneRegen?.();  // notify parent → refresh stale pages (scene → pages linkage)
+      onSceneRegen?.();  // notify parent → refresh stale pages + parent's scene copy
     } catch {
       setGenerating(null);
     }
@@ -181,7 +196,7 @@ export default function SceneManagement({ bookId, initialScene, onSelectScene, o
           <span>Major Locations ({majorLocs.length})</span>
           <button
             onClick={handleGenerateAll}
-            disabled={generating !== null}
+            disabled={generating !== null || !canGenerate}
             className="text-[9px] bg-coral/80 text-white px-2 py-0.5 rounded hover:bg-coral transition-colors disabled:opacity-50"
           >
             {generating ? genAllProgress || "Generating..." : "Gen All"}
@@ -345,7 +360,7 @@ export default function SceneManagement({ bookId, initialScene, onSelectScene, o
             <div className="flex gap-2 pt-2">
               <button
                 onClick={handleRegenerate}
-                disabled={generating !== null}
+                disabled={generating !== null || !canGenerate}
                 className="btn-primary text-sm !px-4 !py-2 flex items-center gap-1.5"
               >
                 <RefreshCw size={14} className={generating === selected.name ? "animate-spin" : ""} />

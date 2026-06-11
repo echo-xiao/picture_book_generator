@@ -95,9 +95,21 @@ async def list_books() -> list[dict[str, Any]]:
 
 async def delete_book(book_id: str) -> bool:
     db = _get_db()
-    res = await db.books.delete_one({"book_id": book_id})
+    # Books are stored one-doc-per-chapter — delete_one left the other chapters
+    # behind, so the book "revived". Delete them all, and clear the consistency
+    # collections too (characters/segments) instead of orphaning them.
+    res = await db.books.delete_many({"book_id": book_id})
     await db.statuses.delete_one({"book_id": book_id})
-    return res.deleted_count > 0
+    for coll in ("characters", "segments", "preprocess_files", "illustrations"):
+        try:
+            await db[coll].delete_many({"book_id": book_id})
+        except Exception:
+            pass
+    # A preprocess-only book has a generated dir but no chapter docs yet — treat
+    # that as deletable too, so the endpoint proceeds to rmtree instead of 404.
+    from src.config import GENERATED_DIR
+    has_dir = (GENERATED_DIR / book_id).exists()
+    return res.deleted_count > 0 or has_dir
 
 
 # ---------------------------------------------------------------------------

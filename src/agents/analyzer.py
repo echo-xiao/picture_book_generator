@@ -74,10 +74,14 @@ class AnalyzerAgent:
                 data[name] = json.loads(path.read_text(encoding="utf-8"))
 
         if not data:
-            print(f"Error: No preprocessed data found for '{self.book_id}'")
-            print(f"  (checked MongoDB MCP, MongoDB, and {self.preprocess_dir})")
-            print(f"Run: python scripts/preprocess_book.py --input <book_file>")
-            sys.exit(1)
+            # This is a library method (also imported into the server process),
+            # so raise instead of sys.exit(1) — a bare exit would kill the whole
+            # API if this is ever called outside the generate_chapter subprocess.
+            raise FileNotFoundError(
+                f"No preprocessed data found for '{self.book_id}' "
+                f"(checked MongoDB MCP, MongoDB, and {self.preprocess_dir}). "
+                f"Run: python scripts/preprocess_book.py --input <book_file>"
+            )
 
         return data
 

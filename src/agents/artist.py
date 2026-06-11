@@ -16,6 +16,8 @@ import time
 from pathlib import Path
 
 from src.config import GENERATED_DIR
+from src.agents.progress import update_progress
+from src.generation.page_service import SELF_CORRECT_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +66,7 @@ class ArtistAgent:
                     "sheet_path": existing,
                     "visual_identity": p.get("visual_identity", ""),
                     "background": p.get("background", ""),
+                    "_cached": True,
                 })
             else:
                 to_generate.append(p)
@@ -89,7 +92,7 @@ class ArtistAgent:
         qa_agent=None,
         progress_callback=None,
         self_correct: bool = False,
-        self_correct_threshold: int = 50,
+        self_correct_threshold: int = SELF_CORRECT_THRESHOLD,
     ) -> list[dict]:
         """Generate page illustrations with optional per-page QA.
 
@@ -110,7 +113,8 @@ class ArtistAgent:
         Returns:
             List of illustration dicts (page_number, image_path, prompt_used).
         """
-        from src.generation.illustration import _get_client, _generate_single_page
+        from src.generation.illustration import _get_client, _generate_single_page, _find_scene_sheet
+        from src.generation.special_pages import _find_book_cover
 
         pages_dir = chapter_dir / "pages"
         pages_dir.mkdir(parents=True, exist_ok=True)
@@ -121,10 +125,16 @@ class ArtistAgent:
         ]
         img_client = _get_client()
 
+        # Same style-reference logic as illustration.generate_illustrations():
+        # use the book cover (if present) so all pages share its visual style.
+        style_ref_path = _find_book_cover(self.book_id)
+        if style_ref_path:
+            logger.info("Using book cover as style reference: %s", style_ref_path)
+
         print(f"\n[Artist Agent] Generating {len(page_prompts)} illustrations...")
 
-        # Progress file for frontend
-        progress_file = chapter_dir / "progress.json"
+        # Progress for frontend (written through the shared merge-writer)
+        chapter_idx = int(chapter_dir.name.replace("ch", "").lstrip("0") or "0")
         total = len(page_prompts)
 
         illustrations: list[dict] = []
@@ -142,13 +152,15 @@ class ArtistAgent:
                     existing = str(candidate)
                     break
 
-            # Update progress
-            progress = int(idx / total * 100) if total > 0 else 0
-            progress_file.write_text(json.dumps({
-                "status": "generating", "progress": progress,
-                "current_step": f"Illustrating page {page_num}/{total}...",
-                "total_pages": total, "completed_pages": idx,
-            }))
+            # Update progress on the SAME 40–90 scale the pipeline callback uses
+            # (was 0–100, which fought the callback and made the bar jump around).
+            progress = 40 + int(idx / total * 50) if total > 0 else 40
+            update_progress(
+                self.book_id, chapter_idx,
+                status="generating", progress=progress,
+                current_step=f"Illustrating page {page_num}/{total}...",
+                total_pages=total, completed_pages=idx, agent="artist",
+            )
             if progress_callback:
                 progress_callback(idx, f"Illustrating page {page_num}/{total}...")
 
@@ -156,9 +168,13 @@ class ArtistAgent:
                 print(f"  Page {page_num}: cached")
                 ill_path = existing
             else:
+                # Matching scene background sheet (same as illustration.py)
+                scene_bg = page_prompt.get("scene_background", "")
+                scene_sheet = _find_scene_sheet(self.book_id, scene_bg) if scene_bg else None
                 t0 = time.time()
                 success, ill_path, prompt = _generate_single_page(
                     img_client, page_prompt, valid_sheets, save_path,
+                    style_ref_path, scene_sheet,
                 )
                 dt = time.time() - t0
                 if not success:
@@ -179,15 +195,22 @@ class ArtistAgent:
                 if progress_callback:
                     progress_callback(idx + 1, f"QA checking page {page_num}/{total}...")
                 result = None
-                if self_correct and existing:
-                    # Reuse the saved report for cached pages instead of
-                    # burning another vision call
+                if existing:
+                    # The page image was unchanged (served from cache) — reuse the
+                    # saved quality report instead of burning another vision call.
+                    # Re-checking a byte-identical image wastes Gemini quota, so do
+                    # this regardless of self_correct.
                     quality_file = chapter_dir / "quality" / f"page_{page_num:03d}_quality.json"
                     if quality_file.exists():
                         try:
                             result = json.loads(quality_file.read_text(encoding="utf-8"))
-                            qa_agent.record_cached(result)
-                            print(f"  [QA Agent] Page {page_num}: {result.get('overall_score', '?')}% (cached report)")
+                            if result.get("qa_failed"):
+                                # A failed QA run was saved with a sentinel score
+                                # of 100 — don't trust it as a real report, re-run.
+                                result = None
+                            else:
+                                qa_agent.record_cached(result)
+                                print(f"  [QA Agent] Page {page_num}: {result.get('overall_score', '?')}% (cached report)")
                         except (json.JSONDecodeError, OSError):
                             result = None
                 if result is None:
@@ -266,7 +289,9 @@ class ArtistAgent:
         new_result = qa_agent.check_page(
             new_path, character_sheets, scene, page_num, chapter_dir,
         ) or {}
-        new_score = new_result.get("overall_score", 0)
+        # If QA itself failed on the retry, its score is a sentinel 100 — don't
+        # trust it; keep the original rather than risk swapping in a worse image.
+        new_score = -1 if new_result.get("qa_failed") else new_result.get("overall_score", 0)
         kept_new = new_score >= old_score
         final = new_result if kept_new else old_result
 

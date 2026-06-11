@@ -24,6 +24,12 @@ GCP_LOCATION = os.getenv("GCP_LOCATION", "global")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
 GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image")
 
+# BYOK gate. When true, generation endpoints require the caller's own Gemini key
+# (403 otherwise) so public users can't bill the project. When false (default),
+# generation falls back to the project backend (Vertex) — convenient while it's
+# just the owner testing; a user-supplied key is still honored if present.
+REQUIRE_USER_KEY = os.getenv("REQUIRE_USER_KEY", "false").lower() == "true"
+
 # DeepSeek (text analysis)
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_MODEL = "deepseek-chat"

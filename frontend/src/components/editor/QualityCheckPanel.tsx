@@ -58,7 +58,10 @@ export default function QualityCheckPanel({
                 { key: "name_face_mismatch", label: "Name-Face Match", data: qualityResult.name_face_mismatch },
                 { key: "character_count", label: "Char Count", data: qualityResult.character_count },
               ].map(({ key, label, data }) => {
-                const score = data?.score ?? 100;
+                // Coerce defensively: a stale/blank score (e.g. "") must not
+                // render as an empty "%". Fall back to 100 when non-numeric.
+                const n = Number(data?.score);
+                const score = Number.isFinite(n) ? n : 100;
                 return (
                   <div key={key} className="flex items-center gap-1 text-xs !leading-[1.26]">
                     <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${

@@ -50,6 +50,11 @@ def _get_db() -> Optional[pymongo.database.Database]:
     except Exception as e:
         _available = False
         _last_fail = time.time()
+        if _client is not None:
+            try:
+                _client.close()  # release topology threads before dropping the ref
+            except Exception:
+                pass
         _client = None  # reset so a later call can reconnect
         logger.warning("MongoDB unavailable (%s); backing off %.0fs", e, _RETRY_AFTER)
         return None
@@ -76,7 +81,13 @@ def save_book(book_id: str, title: str, num_chapters: int, **extra) -> bool:
         "updated_at": datetime.now(timezone.utc).isoformat(),
         **extra,
     }
-    db.books.update_one({"book_id": book_id}, {"$set": doc}, upsert=True)
+    # The pipeline writes per-chapter docs keyed {book_id, chapter} into the
+    # same collection; without the $exists guard this book-level upsert can
+    # match and silently mutate an arbitrary chapter doc.
+    db.books.update_one(
+        {"book_id": book_id, "chapter": {"$exists": False}},
+        {"$set": doc}, upsert=True,
+    )
     return True
 
 

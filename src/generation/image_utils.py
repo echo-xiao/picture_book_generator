@@ -15,6 +15,11 @@ _client: genai.Client | None = None
 
 def _get_client() -> genai.Client:
     global _client
+    # BYOK: when a per-request user key is active, build a fresh client bound to
+    # that key rather than reusing the cached project client.
+    from src.gemini_backend import get_user_api_key
+    if get_user_api_key():
+        return make_genai_client()
     if _client is None:
         _client = make_genai_client()
     return _client

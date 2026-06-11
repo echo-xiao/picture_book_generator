@@ -10,6 +10,7 @@ interface CharacterSheetsPanelProps {
   portraits?: Record<string, string>;
   locations: any[];
   sceneSheets: Record<string, string>;
+  cacheBust?: number;
   bookId?: string;
   onRegenerateSheet?: (canonicalName: string) => void;
   onNavigateToCharacter?: (charName: string) => void;
@@ -22,12 +23,14 @@ export default function CharacterSheetsPanel({
   sheets,
   locations,
   sceneSheets,
+  cacheBust = 0,
   onNavigateToCharacter,
   onNavigateToScene,
 }: CharacterSheetsPanelProps) {
-  // Cache-buster: sheet/scene filenames are stable, so append ?v= to force the
-  // browser to reload after a sheet is regenerated elsewhere.
-  const cacheBust = Date.now();
+  // Cache-buster: sheet/scene filenames are stable, so append ?v= to force a
+  // reload — but ONLY when the parent bumps `cacheBust` after a regeneration.
+  // (Using Date.now() here re-requested every image on each keystroke-driven
+  // re-render, causing constant flicker.)
   const withCacheBust = (url: string) =>
     `${API_BASE}${url}${url.includes("?") ? "&" : "?"}v=${cacheBust}`;
 

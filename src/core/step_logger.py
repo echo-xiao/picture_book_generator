@@ -7,6 +7,7 @@ Each step is saved as:
 
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 _step_counter: dict[str, int] = {}
 _mongo_client = None
+_mongo_last_fail: float = 0.0
+_MONGO_RETRY_AFTER = 30.0  # seconds to back off before retrying a failed connection
 
 
 def _get_step_num(book_id: str) -> int:
@@ -90,8 +93,14 @@ def _save_to_file(book_id: str, step_num: int, tool_name: str, doc: dict) -> Non
 
 
 def _save_to_mongo(doc: dict) -> None:
-    """Save step to MongoDB (best effort, reuses connection)."""
-    global _mongo_client
+    """Save step to MongoDB (best effort, reuses connection).
+
+    On failure, back off for _MONGO_RETRY_AFTER seconds (same pattern as
+    src/core/db.py) so every log_step doesn't block ~3s while Mongo is down.
+    """
+    global _mongo_client, _mongo_last_fail
+    if _mongo_client is None and (time.time() - _mongo_last_fail) < _MONGO_RETRY_AFTER:
+        return
     try:
         if _mongo_client is None:
             import pymongo
@@ -100,6 +109,12 @@ def _save_to_mongo(doc: dict) -> None:
         db.steps.insert_one(doc.copy())
     except Exception as e:
         logger.debug("MongoDB step save skipped: %s", e)
+        _mongo_last_fail = time.time()
+        if _mongo_client is not None:
+            try:
+                _mongo_client.close()  # release topology threads before dropping the ref
+            except Exception:
+                pass
         _mongo_client = None  # Reset so next call retries connection
 
 

@@ -18,12 +18,13 @@ import {
   generateSummary,
   getSegmentHistory,
   checkSegmentQuality,
-  chatWithAI,
   getRegenStatus,
   getLocations,
   getSpecialPages,
   regenerateSpecialPage,
   getStalePages,
+  getConfig,
+  getPreprocessProgress,
 } from "@/lib/api";
 import type { Segment, ChapterInfo, CharacterInfo } from "@/types";
 
@@ -36,16 +37,12 @@ import CharacterManagement from "@/components/editor/CharacterManagement";
 import SceneManagement from "@/components/editor/SceneManagement";
 import AutoTextarea from "@/components/editor/AutoTextarea";
 import AgentActivityPanel from "@/components/editor/AgentActivityPanel";
+import SpecialPageView from "@/components/editor/SpecialPageView";
+import PreprocessLoadingScreen from "@/components/editor/PreprocessLoadingScreen";
+import { AGENT_META } from "@/lib/agents";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 const SENTIMENTS = ["positive", "negative", "neutral", "tense", "emotional"];
-
-const AGENT_LABELS: Record<string, { icon: string; name: string }> = {
-  analyzer: { icon: "\uD83D\uDD0D", name: "Analyzer" },
-  writer: { icon: "\u270D\uFE0F", name: "Writer" },
-  artist: { icon: "\uD83C\uDFA8", name: "Artist" },
-  qa: { icon: "\u2705", name: "QA" },
-};
 
 export default function EditorPage() {
   const params = useParams();
@@ -92,9 +89,15 @@ export default function EditorPage() {
   const [segments, setSegments] = useState<Segment[]>([]);
   const segmentsRef = useRef<Segment[]>([]);
   const [selectedSegment, setSelectedSegment] = useState<Segment | null>(null);
+  // Segment ids with local edits not yet PUT to the backend — handleSave saves
+  // them all, so edits made on a previously-selected segment aren't lost.
+  const dirtySegIds = useRef<Set<number>>(new Set());
   const [staleSegIds, setStaleSegIds] = useState<Set<number>>(new Set());
   const [staleReasons, setStaleReasons] = useState<Record<number, string>>({});
   const [specialCacheBust, setSpecialCacheBust] = useState(0);
+  // Bumped only after a character/scene sheet is regenerated, so CharacterSheetsPanel
+  // reloads images then — NOT on every keystroke (which Date.now() in render caused).
+  const [sheetCacheBust, setSheetCacheBust] = useState(0);
   const [specialPages, setSpecialPages] = useState<Array<{ type: string; label: string; url: string | null; chapter?: number; chapter_title?: string; chapter_summary?: string }>>([]);
   const [selectedSpecial, setSelectedSpecial] = useState<{ type: string; label: string; url: string | null; chapter?: number } | null>(null);
   const [regenSpecial, setRegenSpecial] = useState(false);
@@ -123,10 +126,19 @@ export default function EditorPage() {
   // Agent Activity Panel (open by default so the live agent log is always visible)
   const [agentPanelOpen, setAgentPanelOpen] = useState(true);
 
-  // AI Chat state
-  const [chatMessages, setChatMessages] = useState<Array<{ role: string; content: string }>>([]);
-  const [chatInput, setChatInput] = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
+  // BYOK: the editor is read-only unless the visitor supplied their own Gemini
+  // key (generation endpoints also enforce this server-side with a 403).
+  const [hasKey] = useState(() => typeof window !== "undefined" && !!localStorage.getItem("pbg_api_key"));
+  const [keyInput, setKeyInput] = useState("");
+  // The BYOK gate is only enforced when the backend says so (REQUIRE_USER_KEY).
+  // Default off → editor is fully usable without a key (project/Vertex billing).
+  const [requireKey, setRequireKey] = useState(false);
+  useEffect(() => {
+    getConfig().then(c => setRequireKey(!!c.require_user_key)).catch(() => {});
+  }, []);
+  const canEdit = hasKey || !requireKey;
+
+  // Expand/collapse state for the read-only LLM Prompt Preview (AIChatPanel).
   const [chatOpen, setChatOpen] = useState(false);
 
   const selectedSegId = selectedSegment?.id ?? -1;
@@ -135,6 +147,14 @@ export default function EditorPage() {
   useEffect(() => {
     segmentsRef.current = segments;
   }, [segments]);
+
+  // Keep a ref of the selected chapter too — the long Gen-All loop captures it
+  // once and would otherwise refresh/compare against the chapter that was
+  // selected when the button was clicked, not the one the user is now viewing.
+  const selectedChapterRef = useRef<number | null>(null);
+  useEffect(() => {
+    selectedChapterRef.current = selectedChapter;
+  }, [selectedChapter]);
 
   // Refresh the set of stale pages (deps regenerated after the page image) for a chapter
   const refreshStale = async (chIdx: number | null) => {
@@ -163,6 +183,12 @@ export default function EditorPage() {
         const prog = await getChapterProgress(bookId, generatingChapter).catch(() => null);
         if (!prog) return;
         setChapterProgress(prog);
+        if (prog.status === "failed") {
+          setGeneratingChapter(null);
+          setChapterProgress(null);
+          alert(`Chapter generation failed: ${(prog as any).error || prog.current_step || "unknown error"}`);
+          return;
+        }
         if (prog.status === "complete" && !genAllChaptersRef.current) {
           // Only auto-clear when NOT in Gen All mode (Gen All handles its own transitions)
           setGeneratingChapter(null);
@@ -170,7 +196,10 @@ export default function EditorPage() {
           if (selectedChapter === generatingChapter) {
             const data = await getChapterSegments(bookId, generatingChapter);
             setSegments(data.segments || []);
+            // Remap the open segment to its fresh copy (new illustration_url etc.)
+            setSelectedSegment(prev => prev ? (data.segments || []).find((s: Segment) => s.id === prev.id) || prev : prev);
           }
+          refreshStale(generatingChapter);  // pages regenerated → clear stale red dots
         }
       } catch {}
     }, 5000);
@@ -211,11 +240,16 @@ export default function EditorPage() {
               const prog = await getChapterProgress(bookId, chIdx).catch(() => null);
               if (!prog) return;
               setChapterProgress(prog);
-              if (prog.status === "complete") {
-                // Refresh segments for this chapter to update green dots
-                if (selectedChapter === chIdx) {
+              if (prog.status === "complete" || prog.status === "failed") {
+                // On success refresh segments (green dots); on failure just move
+                // on instead of waiting out the 16-min per-chapter timeout.
+                if (prog.status === "complete" && selectedChapterRef.current === chIdx) {
                   getChapterSegments(bookId, chIdx)
-                    .then(data => setSegments(data.segments || []))
+                    .then(data => {
+                      setSegments(data.segments || []);
+                      // Remap the open segment to its fresh copy (new illustration_url etc.)
+                      setSelectedSegment(prev => prev ? (data.segments || []).find((s: Segment) => s.id === prev.id) || prev : prev);
+                    })
                     .catch(() => {});
                 }
                 clearInterval(poll);
@@ -223,7 +257,11 @@ export default function EditorPage() {
               }
             } catch {}
           }, 5000);
-          setTimeout(() => { clearInterval(poll); resolve(); }, 600000); // 10 min timeout per chapter
+          // Must exceed the backend subprocess timeout (900s) — if the frontend
+          // gave up first it would start the next chapter while the previous
+          // subprocess was still running, double-hitting Gemini and racing on
+          // progress.json / agent_log.json.
+          setTimeout(() => { clearInterval(poll); resolve(); }, 960000); // 16 min > backend 15 min
         });
       } catch (e) {
         console.error(`Gen chapter ${chIdx} failed:`, e);
@@ -242,21 +280,24 @@ export default function EditorPage() {
     } catch {}
 
     // Pages were regenerated — refresh stale indicators
-    refreshStale(selectedChapter);
+    refreshStale(selectedChapterRef.current);
   };
 
   // Load chapters + characters on mount (retry until preprocess is done)
   useEffect(() => {
     let retryTimer: NodeJS.Timeout;
+    let cancelled = false;
 
     async function load() {
       try {
         const chapData = await getChapters(bookId);
+        if (cancelled) return;
         const chapKeys = Object.keys(chapData.chapters || {});
 
         if (chapKeys.length > 0) {
           // Preprocess is done — load everything
           const charData = await getCharacters(bookId);
+          if (cancelled) return;
           setChapters(chapData.chapters || {});
           setMeta(chapData.meta || {});
           setCharacters(charData.characters || []);
@@ -264,10 +305,12 @@ export default function EditorPage() {
           setPortraits(charData.portraits || {});
           // Load locations + special pages (best-effort)
           getLocations(bookId).then(d => {
+            if (cancelled) return;
             setLocations(d.locations || []);
             setSceneSheets(d.scene_sheets || {});
           }).catch(() => {});
           getSpecialPages(bookId).then(d => {
+            if (cancelled) return;
             setSpecialPages(d.pages || []);
           }).catch(() => {});
           setAliasMap(charData.alias_map || {});
@@ -283,17 +326,32 @@ export default function EditorPage() {
       } catch {
         // API error or 404 — preprocess not ready
       }
+      if (cancelled) return;
+      // If preprocess failed fatally, stop retrying and surface the error
+      try {
+        const prog = await getPreprocessProgress(bookId);
+        if (cancelled) return;
+        if (prog?.status === "error") {
+          setPreprocessError(prog.error || prog.step || "Preprocess failed");
+          return;
+        }
+      } catch {}
+      if (cancelled) return;
       // Still processing — retry in 5 seconds
       retryTimer = setTimeout(load, 5000);
     }
 
     load();
-    return () => clearTimeout(retryTimer);
+    return () => { cancelled = true; clearTimeout(retryTimer); };
   }, [bookId]);
 
   // Load segments + cached consistency when chapter changes
   useEffect(() => {
     setQualityResult(null);
+    // Clear immediately so the previous chapter's segments don't render under
+    // the newly-selected chapter for the moment before the fetch returns.
+    setSegments([]);
+    setSelectedSegment(null);
     if (selectedChapter === null) return;
     let cancelled = false;
     async function loadSegments() {
@@ -344,25 +402,22 @@ export default function EditorPage() {
     window.history.replaceState(null, "", `/editor/${bookId}?${params.toString()}`);
   }, [bookId, activeTab, selectedChapter, selectedSegment?.id, selectedCharName, selectedSceneName]);
 
-  // Clear chat when segment changes
+  // Auto-generate simplified text if empty — only when editing is enabled, so a
+  // view-only / no-key visitor doesn't silently trigger paid LLM calls.
   useEffect(() => {
-    setChatMessages([]);
-    setChatInput("");
-  }, [selectedSegId]);
-
-  // Auto-generate simplified text if empty
-  useEffect(() => {
-    if (selectedSegId < 0 || !selectedSegment || selectedSegment.simplified_text) return;
+    if (selectedSegId < 0 || !selectedSegment || selectedSegment.simplified_text || !canEdit) return;
     const segId = selectedSegId;
     generateSimplifiedText(bookId, segId)
       .then((res) => {
         if (res.simplified_text) {
-          setSelectedSegment(prev => prev?.id === segId ? { ...prev, simplified_text: res.simplified_text } : prev);
-          setSegments(prev => prev.map(s => s.id === segId ? { ...s, simplified_text: res.simplified_text } : s));
+          // Only apply if STILL empty — don't clobber text the user typed while
+          // the request was in flight.
+          setSelectedSegment(prev => prev?.id === segId && !prev.simplified_text ? { ...prev, simplified_text: res.simplified_text } : prev);
+          setSegments(prev => prev.map(s => s.id === segId && !s.simplified_text ? { ...s, simplified_text: res.simplified_text } : s));
         }
       })
       .catch(() => {});
-  }, [selectedSegId]);
+  }, [selectedSegId, canEdit]);
 
   // Load history when segment changes
   useEffect(() => {
@@ -392,6 +447,23 @@ export default function EditorPage() {
         scene_summary: selectedSegment.scene_summary,
         sentiment: selectedSegment.sentiment,
       });
+      // Also persist any other segments edited but never saved (the user can
+      // edit a segment, switch to another, then hit Save).
+      for (const segId of Array.from(dirtySegIds.current)) {
+        if (segId === selectedSegment.id) continue;
+        const seg = segmentsRef.current.find((s) => s.id === segId);
+        if (!seg) continue;
+        await updateSegment(bookId, segId, {
+          text: seg.text,
+          simplified_text: seg.simplified_text,
+          characters_in_scene: seg.characters_in_scene,
+          character_actions: seg.character_actions,
+          scene_background: seg.scene_background,
+          scene_summary: seg.scene_summary,
+          sentiment: seg.sentiment,
+        });
+      }
+      dirtySegIds.current = new Set();
     } catch (e) {
       console.error("Save failed:", e);
     } finally {
@@ -416,125 +488,43 @@ export default function EditorPage() {
         scene_summary: selectedSegment.scene_summary,
         sentiment: selectedSegment.sentiment,
       });
-      // Trigger regeneration
+      // Trigger regeneration. The BACKEND runs the QA check + bounded
+      // self-correction (shared page service, same policy as the pipeline);
+      // the frontend only triggers and waits — no client-side retry loop.
       await regenerateSegment(bookId, segId);
-      // Poll regen-status every 5s until complete
-      let cleared = false;
-      const pollInterval = setInterval(async () => {
-        if (cleared) return;
-        try {
-          const status = await getRegenStatus(bookId, segId);
-          if (status.status === "complete") {
-            cleared = true;
-            clearInterval(pollInterval);
-            // Reload segments to get new illustration URL
-            const data = await getChapterSegments(bookId, chIdx);
-            const updated = data.segments?.find((s: Segment) => s.id === segId);
-            if (updated) {
-              setSegments(data.segments || []);
-              setSelectedSegment(prev => prev?.id === segId ? updated : prev);
-            }
-            setRegenerating(false);
-            // Page image regenerated — it's no longer stale
-            refreshStale(chIdx);
-
-            // Auto quality check + retry loop (up to 3 rounds if score < 75%)
-            const MAX_QUALITY_RETRIES = 3;
-            for (let attempt = 1; attempt <= MAX_QUALITY_RETRIES; attempt++) {
-              setCheckingQuality(true);
-              try {
-                const result = await checkSegmentQuality(bookId, segId);
-                setQualityResult(result);
-
-                if (result.overall_score >= 75 || attempt >= MAX_QUALITY_RETRIES) {
-                  // Good enough or exhausted retries
-                  if (attempt >= MAX_QUALITY_RETRIES && result.overall_score < 75) {
-                    console.warn(`Quality still ${result.overall_score}% after ${MAX_QUALITY_RETRIES} attempts`);
-                  }
-                  break;
-                }
-
-                // Score < 75%: use AI to fix prompts, then auto-regen
-                const fixMsg = `Quality check found issues (score: ${result.overall_score}%, attempt ${attempt}/${MAX_QUALITY_RETRIES}). Please fix the prompts based on this feedback:\n${result.regeneration_feedback}`;
-                setChatOpen(true);
-                setChatMessages(prev => [...prev, { role: "user", content: fixMsg }]);
-                setChatLoading(true);
-                try {
-                  const res = await chatWithAI(bookId, segId, fixMsg, []);
-                  setChatMessages(prev => [...prev, { role: "assistant", content: res.reply }]);
-                  if (res.updates && Object.keys(res.updates).length > 0) {
-                    // Apply AI fixes to segment
-                    const applyUpdates = (seg: Segment) => {
-                      const fix = { ...seg, ...res.updates } as any;
-                      if (res.updates.character_actions) {
-                        fix.characters_in_scene = (res.updates.character_actions as any[]).map((a: any) => a.name).filter(Boolean);
-                      }
-                      return fix;
-                    };
-                    setSelectedSegment(prev => prev?.id === segId ? applyUpdates(prev) : prev);
-                    setSegments(prev => prev.map(s => s.id === segId ? applyUpdates(s) : s));
-
-                    // Save updated prompts (read latest segments to avoid stale closure)
-                    const latestSeg = segmentsRef.current.find(s => s.id === segId);
-                    if (latestSeg) {
-                      const merged = { ...latestSeg, ...res.updates };
-                      await updateSegment(bookId, segId, {
-                        simplified_text: merged.simplified_text,
-                        characters_in_scene: merged.characters_in_scene,
-                        character_actions: merged.character_actions,
-                        scene_background: merged.scene_background,
-                        scene_summary: merged.scene_summary,
-                        sentiment: merged.sentiment,
-                      });
-                    }
-                  }
-                } catch {} finally { setChatLoading(false); }
-
-                // Auto-regenerate illustration with fixed prompts
-                setRegenerating(true);
-                await regenerateSegment(bookId, segId);
-                // Wait for regen to complete
-                await new Promise<void>((resolve) => {
-                  const regenPoll = setInterval(async () => {
-                    try {
-                      const st = await getRegenStatus(bookId, segId);
-                      if (st.status === "complete") {
-                        clearInterval(regenPoll);
-                        // Reload segments
-                        const freshData = await getChapterSegments(bookId, chIdx);
-                        const freshSeg = freshData.segments?.find((s: Segment) => s.id === segId);
-                        if (freshSeg) {
-                          setSegments(freshData.segments || []);
-                          setSelectedSegment(prev => prev?.id === segId ? freshSeg : prev);
-                        }
-                        setRegenerating(false);
-                        refreshStale(chIdx);
-                        resolve();
-                      }
-                    } catch {}
-                  }, 5000);
-                  setTimeout(() => { clearInterval(regenPoll); setRegenerating(false); resolve(); }, 180000);
-                });
-              } catch {
-                break;
-              } finally {
-                setCheckingQuality(false);
+      await new Promise<void>((resolve) => {
+        let done = false;
+        const poll = setInterval(async () => {
+          if (done) return;
+          try {
+            const status = await getRegenStatus(bookId, segId);
+            if (status.status === "complete" || status.status === "error") {
+              done = true;
+              clearInterval(poll);
+              if (status.status === "error") {
+                alert(`Regenerate failed: ${(status as any).error || "unknown error"}`);
+              } else if (selectedChapterRef.current === chIdx) {
+                // Only apply if the user is still viewing the chapter that was
+                // selected at click time — otherwise we'd overwrite the
+                // currently-selected chapter's segments with another chapter's.
+                const data = await getChapterSegments(bookId, chIdx);
+                const updated = data.segments?.find((s: Segment) => s.id === segId);
+                setSegments(data.segments || []);
+                if (updated) setSelectedSegment(prev => prev?.id === segId ? updated : prev);
               }
+              resolve();
             }
-          }
-        } catch {}
-      }, 5000);
-      // Timeout after 3 minutes
-      setTimeout(() => {
-        if (!cleared) {
-          cleared = true;
-          clearInterval(pollInterval);
-          setRegenerating(false);
-        }
-      }, 180000);
+          } catch {}
+        }, 5000);
+        setTimeout(() => { if (!done) { done = true; clearInterval(poll); resolve(); } }, 180000);
+      });
+      // Page regenerated — refresh stale flags. The history/quality effect
+      // (keyed on `regenerating`) reloads the backend's QA result for display.
+      if (selectedChapterRef.current === chIdx) refreshStale(chIdx);
     } catch (e: any) {
       console.error("Regenerate failed:", e);
       alert(`Regenerate failed: ${e?.message || e}`);
+    } finally {
       setRegenerating(false);
     }
   };
@@ -542,6 +532,7 @@ export default function EditorPage() {
   // Update selected segment field
   const updateField = (field: string, value: unknown) => {
     if (!selectedSegment) return;
+    dirtySegIds.current.add(selectedSegment.id);
     setSelectedSegment({ ...selectedSegment, [field]: value });
     setSegments((prev) =>
       prev.map((s) => (s.id === selectedSegment.id ? { ...s, [field]: value } : s))
@@ -557,8 +548,10 @@ export default function EditorPage() {
     sceneRegenTimer.current = setTimeout(async () => {
       try {
         setRegenningBg(true);
-        // Save current segment first so backend has latest characters
-        const seg = segments.find(s => s.id === segId);
+        // Read the LATEST segments via the ref — the closed-over `segments`
+        // is from the render that scheduled this timer and is missing the edit
+        // the user just typed, which would persist a stale character list.
+        const seg = segmentsRef.current.find(s => s.id === segId);
         if (seg) {
           await updateSegment(bookId, segId, {
             characters_in_scene: seg.characters_in_scene,
@@ -576,11 +569,12 @@ export default function EditorPage() {
         setRegenningBg(false);
       }
     }, 2000);
-  }, [bookId, segments]);
+  }, [bookId]);
 
   // Update character action — must update both fields in one setState call
   const updateAction = (idx: number, field: "name" | "action", value: string) => {
     if (!selectedSegment) return;
+    dirtySegIds.current.add(selectedSegment.id);
     const actions = [...(selectedSegment.character_actions || [])];
     actions[idx] = { ...actions[idx], [field]: value };
     const updated = {
@@ -598,6 +592,7 @@ export default function EditorPage() {
 
   const addCharacterAction = () => {
     if (!selectedSegment) return;
+    dirtySegIds.current.add(selectedSegment.id);
     const actions = [...(selectedSegment.character_actions || []), { name: "", action: "" }];
     const updated = { ...selectedSegment, character_actions: actions };
     setSelectedSegment(updated);
@@ -606,6 +601,7 @@ export default function EditorPage() {
 
   const removeCharacterAction = (idx: number) => {
     if (!selectedSegment) return;
+    dirtySegIds.current.add(selectedSegment.id);
     const actions = (selectedSegment.character_actions || []).filter((_, i) => i !== idx);
     const updated = {
       ...selectedSegment,
@@ -616,39 +612,6 @@ export default function EditorPage() {
     setSegments((prev) => prev.map((s) => (s.id === selectedSegment.id ? updated : s)));
     // Auto-regenerate scene_background after removing character
     triggerSceneBackgroundRegen(selectedSegment.id);
-  };
-
-  // Send chat message to AI
-  const handleChatSend = async () => {
-    if (!chatInput.trim() || !selectedSegment || chatLoading) return;
-    const userMsg = chatInput.trim();
-    setChatInput("");
-    const newMessages = [...chatMessages, { role: "user", content: userMsg }];
-    setChatMessages(newMessages);
-    setChatLoading(true);
-    try {
-      const res = await chatWithAI(bookId, selectedSegment.id, userMsg, chatMessages);
-      setChatMessages([...newMessages, { role: "assistant", content: res.reply }]);
-      // Apply updates to the segment fields
-      if (res.updates && Object.keys(res.updates).length > 0) {
-        let updated = { ...selectedSegment };
-        if (res.updates.simplified_text !== undefined) updated.simplified_text = res.updates.simplified_text as string;
-        if (res.updates.scene_background !== undefined) updated.scene_background = res.updates.scene_background as string;
-        if (res.updates.scene_summary !== undefined) updated.scene_summary = res.updates.scene_summary as string;
-        if (res.updates.sentiment !== undefined) updated.sentiment = res.updates.sentiment as string;
-        if (res.updates.character_actions !== undefined) {
-          updated.character_actions = res.updates.character_actions as any;
-          updated.characters_in_scene = (res.updates.character_actions as any[]).map((a: any) => a.name).filter(Boolean);
-        }
-        setSelectedSegment(updated);
-        setSegments((prev) => prev.map((s) => (s.id === selectedSegment.id ? updated : s)));
-      }
-    } catch (e) {
-      setChatMessages([...newMessages, { role: "assistant", content: "Error: Failed to get AI response." }]);
-      console.error("Chat error:", e);
-    } finally {
-      setChatLoading(false);
-    }
   };
 
   // Handle quality check
@@ -676,12 +639,41 @@ export default function EditorPage() {
           clearInterval(poll);
           setSheets(data.sheets || {});
           setPortraits(data.portraits || {});
+          setSheetCacheBust(v => v + 1);  // sheet file reused its name — force reload
           // Character sheet changed — pages depending on it are now stale
           refreshStale(selectedChapter);
         }
       } catch {}
     }, 5000);
     setTimeout(() => clearInterval(poll), 120000);
+  };
+
+  // Regenerate a special page (book/chapter cover, back cover) + poll until ready
+  const handleRegenSpecial = async () => {
+    if (!selectedSpecial) return;
+    const spType = selectedSpecial.type;
+    const spChapter = selectedSpecial.chapter ?? 0;
+    setRegenSpecial(true);
+    try {
+      await regenerateSpecialPage(bookId, spType, spChapter);
+      await new Promise<void>((resolve) => {
+        const poll = setInterval(async () => {
+          try {
+            const data = await getSpecialPages(bookId);
+            const found = data.pages.find(p => p.type === spType && (p.chapter ?? 0) === spChapter);
+            if (found?.url) {
+              clearInterval(poll);
+              setSpecialPages(data.pages || []);
+              setSelectedSpecial(found);
+              setSpecialCacheBust(Date.now());
+              setRegenSpecial(false);
+              resolve();
+            }
+          } catch {}
+        }, 5000);
+        setTimeout(() => { clearInterval(poll); setRegenSpecial(false); resolve(); }, 120000);
+      });
+    } catch { setRegenSpecial(false); }
   };
 
   // Handle version selection from carousel
@@ -693,6 +685,7 @@ export default function EditorPage() {
   };
 
   const [loadingStatus, setLoadingStatus] = useState("Loading book data...");
+  const [preprocessError, setPreprocessError] = useState<string | null>(null);
   const [preprocessProgress, setPreprocessProgress] = useState<{
     progress: number; step: string; steps_done: string[];
     annotated_chapters?: number; total_chapters?: number;
@@ -700,85 +693,24 @@ export default function EditorPage() {
 
   // Poll preprocess progress while loading
   useEffect(() => {
-    if (!loading) return;
+    if (!loading || preprocessError) return;
     const interval = setInterval(async () => {
       try {
         const prog = await fetch(`/api/book/${bookId}/preprocess/progress`).then(r => r.json());
+        if (prog.status === "error") {
+          setPreprocessError(prog.error || prog.step || "Preprocess failed");
+          clearInterval(interval);
+          return;
+        }
         setPreprocessProgress(prog);
         setLoadingStatus(prog.step || "Processing...");
       } catch {}
     }, 3000);
     return () => clearInterval(interval);
-  }, [loading, bookId]);
-
-  const PREPROCESS_STEPS = [
-    { key: "extract_text", label: "Extracting text and chapters", agent: "analyzer" },
-    { key: "identify_characters", label: "Identifying characters with AI", agent: "analyzer" },
-    { key: "build_aliases", label: "Building alias map", agent: "analyzer" },
-    { key: "replace_aliases", label: "Replacing name aliases", agent: "analyzer" },
-    { key: "segment_text", label: "Segmenting into scenes", agent: "analyzer" },
-    { key: "annotate_complete", label: "Annotating characters, actions, sentiment", agent: "analyzer" },
-  ];
+  }, [loading, bookId, preprocessError]);
 
   if (loading) {
-    const progress = preprocessProgress?.progress || 0;
-    const stepsDone = new Set(preprocessProgress?.steps_done || []);
-
-    const currentAgent = (preprocessProgress as any)?.agent ? AGENT_LABELS[(preprocessProgress as any).agent] : null;
-
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-cream">
-        <div className="text-center max-w-md w-full px-4">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-coral mx-auto mb-4" />
-          <p className="text-gray-700 font-semibold mb-2">
-            Preprocessing Book...
-          </p>
-          {currentAgent && (
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white shadow-sm border border-gray-100 mb-2 text-blue-600">
-              <span className="text-sm">{currentAgent.icon}</span>
-              <span className="text-xs font-semibold">{currentAgent.name} Agent</span>
-            </div>
-          )}
-          <p className="text-gray-500 text-sm mb-2">{loadingStatus}</p>
-          {preprocessProgress && (preprocessProgress.annotated_chapters ?? 0) > 0 && (
-            <p className="text-coral font-semibold text-sm mb-2">
-              {preprocessProgress.annotated_chapters} / {preprocessProgress.total_chapters || "?"} chapters annotated
-            </p>
-          )}
-
-          {/* Progress bar */}
-          <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden mb-2">
-            <div
-              className="h-full bg-gradient-to-r from-coral to-sunshine rounded-full transition-all duration-700"
-              style={{ width: `${progress}%` }}
-            />
-          </div>
-          <p className="text-sm text-gray-400 mb-4">{progress}%</p>
-
-          {/* Steps with agent labels */}
-          <div className="bg-white rounded-xl p-4 text-left text-xs space-y-2">
-            {PREPROCESS_STEPS.map((s, idx) => {
-              const done = stepsDone.has(s.key);
-              const current = !done && idx === PREPROCESS_STEPS.findIndex(st => !stepsDone.has(st.key));
-              const agentInfo = AGENT_LABELS[s.agent];
-              return (
-                <div key={s.key} className={`flex items-center gap-2 ${
-                  done ? "text-gray-400" : current ? "text-coral font-semibold" : "text-gray-300"
-                }`}>
-                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${
-                    done ? "bg-sage text-white" : current ? "bg-coral text-white animate-pulse" : "bg-gray-200"
-                  }`}>
-                    {done ? "\u2713" : idx + 1}
-                  </span>
-                  <span className="text-sm">{agentInfo?.icon}</span>
-                  {s.label}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    );
+    return <PreprocessLoadingScreen loadingStatus={loadingStatus} preprocessProgress={preprocessProgress} error={preprocessError} />;
   }
 
   return (
@@ -855,7 +787,7 @@ export default function EditorPage() {
                 </span>
                 {(() => {
                   const agent = (chapterProgress as any)?.agent;
-                  const info = agent ? AGENT_LABELS[agent] : null;
+                  const info = agent ? AGENT_META[agent] : null;
                   return info ? `${info.icon} ${info.name}` : "Agents";
                 })()}
               </>
@@ -875,6 +807,32 @@ export default function EditorPage() {
         </div>
       </header>
 
+      {requireKey && !hasKey && (
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-2 text-xs text-amber-800 flex items-center justify-center gap-2 shrink-0 flex-wrap">
+          <span>👁 View-only — paste your Gemini API key to edit:</span>
+          <input
+            type="password"
+            name="gemini_key"
+            aria-label="Gemini API key"
+            value={keyInput}
+            onChange={(e) => setKeyInput(e.target.value)}
+            placeholder="AIza..."
+            className="px-2 py-1 rounded border border-amber-300 text-gray-700 w-52 bg-white focus:outline-none focus:ring-2 focus:ring-amber-300"
+          />
+          <button
+            onClick={() => {
+              const k = keyInput.trim();
+              if (k) { localStorage.setItem("pbg_api_key", k); window.location.reload(); }
+            }}
+            disabled={!keyInput.trim()}
+            className="px-2.5 py-1 rounded bg-amber-500 text-white font-semibold hover:bg-amber-600 disabled:opacity-50"
+          >
+            Save &amp; enable
+          </button>
+          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="underline">get a free key</a>
+        </div>
+      )}
+
       {/* Body: tab content + persistent live Agent Activity column side by side */}
       <div className="flex flex-1 overflow-hidden">
       {/* Tab content area */}
@@ -883,6 +841,7 @@ export default function EditorPage() {
       {activeTab === "characters" && (
         <CharacterManagement
           bookId={bookId}
+          canGenerate={canEdit}
           characters={characters}
           sheets={sheets}
           aliasMap={aliasMap}
@@ -891,38 +850,25 @@ export default function EditorPage() {
             setCharacters(chars);
             setSheets(newSheets);
             setNavigateToChar(null);
-            // Cascade rename into segments if a character was renamed
+            setSheetCacheBust(v => v + 1);  // a sheet may have been (re)generated — reload images
+            // On rename the BACKEND cascades the new name across all segments,
+            // the alias map, the gender map and the sheet files. Refetch the
+            // affected client state instead of mutating it locally — the old
+            // local loop raced segmentsRef and silently dropped every change
+            // after the first, and never touched other chapters or the aliases.
             if (renamedFrom && renamedTo && renamedFrom !== renamedTo) {
-              const renameInSegment = (seg: Segment): Segment => {
-                const newChars = (seg.characters_in_scene || []).map(c => c === renamedFrom ? renamedTo : c);
-                const newActions = (seg.character_actions || []).map(a =>
-                  a.name === renamedFrom ? { ...a, name: renamedTo } : a
-                );
-                if (
-                  newChars.join(",") !== (seg.characters_in_scene || []).join(",") ||
-                  newActions.some((a, i) => a.name !== (seg.character_actions || [])[i]?.name)
-                ) {
-                  return { ...seg, characters_in_scene: newChars, character_actions: newActions };
-                }
-                return seg;
-              };
-              const renamed = segmentsRef.current.map(renameInSegment);
-              setSegments(renamed);
-              setSelectedSegment(prev => prev ? renameInSegment(prev) : prev);
-              // Persist each segment that actually changed
-              (async () => {
-                for (let i = 0; i < renamed.length; i++) {
-                  if (renamed[i] === segmentsRef.current[i]) continue;
-                  try {
-                    await updateSegment(bookId, renamed[i].id, {
-                      characters_in_scene: renamed[i].characters_in_scene,
-                      character_actions: renamed[i].character_actions,
-                    });
-                  } catch (e) {
-                    console.error("Persist rename cascade failed:", e);
-                  }
-                }
-              })();
+              getCharacters(bookId).then(d => {
+                setAliasMap(d.alias_map || {});
+                setPortraits(d.portraits || {});
+                setSheets(d.sheets || {});
+              }).catch(() => {});
+              if (selectedChapter !== null) {
+                getChapterSegments(bookId, selectedChapter).then(d => {
+                  setSegments(d.segments || []);
+                  setSelectedSegment(prev => prev ? (d.segments || []).find((s: Segment) => s.id === prev.id) || prev : prev);
+                }).catch(() => {});
+              }
+              setSheetCacheBust(v => v + 1);
             }
             // A character may have been regenerated — refresh stale pages
             refreshStale(selectedChapter);
@@ -935,9 +881,19 @@ export default function EditorPage() {
       {activeTab === "scenes" && (
         <SceneManagement
           bookId={bookId}
+          canGenerate={canEdit}
           initialScene={initialScene}
           onSelectScene={setSelectedSceneName}
-          onSceneRegen={() => refreshStale(selectedChapter)}
+          onSceneRegen={() => {
+            refreshStale(selectedChapter);
+            // SceneManagement keeps its own copy of locations/sceneSheets; sync the
+            // parent's copy (used by the Pages-tab CharacterSheetsPanel) and reload images.
+            getLocations(bookId).then(d => {
+              setLocations(d.locations || []);
+              setSceneSheets(d.scene_sheets || {});
+            }).catch(() => {});
+            setSheetCacheBust(v => v + 1);
+          }}
         />
       )}
 
@@ -957,7 +913,7 @@ export default function EditorPage() {
               )}
               <button
                 onClick={handleGenAllChapters}
-                disabled={genAllChapters || generatingChapter !== null}
+                disabled={genAllChapters || generatingChapter !== null || !canEdit}
                 className="text-[9px] bg-coral/80 text-white px-2 py-0.5 rounded hover:bg-coral transition-colors disabled:opacity-50"
               >
                 {genAllChapters ? "Running..." : "Gen All"}
@@ -994,7 +950,15 @@ export default function EditorPage() {
                   }`}
                 >
                   <button
-                    onClick={() => { setSelectedChapter(selectedChapter === +chIdx ? null : +chIdx); setSelectedSpecial(null); }}
+                    onClick={() => {
+                      const next = selectedChapter === +chIdx ? null : +chIdx;
+                      if (next !== selectedChapter && dirtySegIds.current.size > 0) {
+                        if (!window.confirm("You have unsaved segment edits. Discard them?")) return;
+                        dirtySegIds.current = new Set();
+                      }
+                      setSelectedChapter(next);
+                      setSelectedSpecial(null);
+                    }}
                     className={`flex-1 text-left px-3 py-2 text-xs font-semibold flex items-center gap-1 min-w-0 ${
                       selectedChapter === +chIdx ? "text-coral" : "text-gray-700"
                     }`}
@@ -1014,7 +978,7 @@ export default function EditorPage() {
                       <p className="text-[8px] text-amber-600 text-center mt-0.5 animate-pulse">
                         {(() => {
                           const agent = (chapterProgress as any)?.agent;
-                          const agentInfo = agent ? AGENT_LABELS[agent] : null;
+                          const agentInfo = agent ? AGENT_META[agent] : null;
                           const step = chapterProgress?.current_step || "Starting...";
                           return agentInfo ? `${agentInfo.icon} ${step}` : step;
                         })()}
@@ -1028,11 +992,14 @@ export default function EditorPage() {
                         setAgentPanelOpen(true);
                         try {
                           await generateChapter(bookId, +chIdx);
-                        } catch (err) {
+                        } catch (err: any) {
                           console.error(err);
+                          // Reset so the Gen buttons don't stay disabled forever
+                          setGeneratingChapter(null);
+                          alert(`Chapter generation failed: ${err?.response?.data?.detail || err?.message || err}`);
                         }
                       }}
-                      disabled={generatingChapter === +chIdx}
+                      disabled={generatingChapter !== null || !canEdit}
                       className="w-8 h-6 mr-1 text-[9px] bg-coral/80 text-white rounded hover:bg-coral transition-colors disabled:opacity-50 shrink-0"
                       title="Generate illustrations for this chapter"
                     >
@@ -1128,139 +1095,18 @@ export default function EditorPage() {
         {/* Main content */}
         <div className="flex-1 flex overflow-hidden">
           {selectedSpecial ? (
-            /* Special Page View */
-            <div className="flex-1 flex overflow-hidden">
-              {/* Image */}
-              <div className="flex-1 overflow-y-auto p-6 flex flex-col items-center justify-center">
-                <h2 className="font-display text-lg font-bold text-gray-800 mb-4">{selectedSpecial.label}</h2>
-                {selectedSpecial.url ? (
-                  <img
-                    src={`${API_BASE}${selectedSpecial.url}${
-                      specialCacheBust ? `${selectedSpecial.url.includes("?") ? "&" : "?"}v=${specialCacheBust}` : ""
-                    }`}
-                    alt={selectedSpecial.label}
-                    className="max-h-[calc(100vh-200px)] max-w-full rounded-xl shadow-md object-contain"
-                  />
-                ) : regenSpecial ? (
-                  <div className="w-full max-w-md aspect-square bg-peach/10 rounded-xl flex flex-col items-center justify-center gap-3">
-                    <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-coral" />
-                    <p className="text-sm text-gray-500">Generating...</p>
-                    <p className="text-xs text-gray-400">~30 seconds</p>
-                  </div>
-                ) : (
-                  <div className="w-full max-w-md aspect-square bg-peach/20 rounded-xl flex flex-col items-center justify-center text-gray-400 gap-2">
-                    <Image size={32} />
-                    <p className="text-xs">Not generated yet</p>
-                  </div>
-                )}
-              </div>
-              {/* Right: Info + Regenerate */}
-              <div className="w-[300px] shrink-0 overflow-y-auto p-5 space-y-4 border-l border-peach/20">
-                {/* Book Cover fields */}
-                {selectedSpecial.type === "book_cover" && (
-                  <>
-                    <div>
-                      <label className="text-xs text-gray-500 font-semibold mb-1 block">Book Title</label>
-                      <p className="text-sm text-gray-800 font-bold bg-cream/50 rounded-lg p-3">{meta.title || bookId}</p>
-                    </div>
-                    <div>
-                      <label className="text-xs text-gray-500 font-semibold mb-1 block">Subtitle</label>
-                      <p className="text-sm text-gray-700 bg-cream/50 rounded-lg p-3">A Picture Book</p>
-                    </div>
-                    <div>
-                      <label className="text-xs text-gray-500 font-semibold mb-1 block">Main Characters</label>
-                      <div className="space-y-1">
-                        {characters.filter(c => c.role === "main").map(c => (
-                          <div key={c.canonical_name} className="flex items-center gap-2 bg-cream/50 rounded-lg px-3 py-1.5">
-                            <span className={`w-2 h-2 rounded-full ${sheets[c.canonical_name] ? "bg-green-400" : "bg-gray-300"}`} />
-                            <span className="text-xs text-gray-700">{c.canonical_name}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                {/* Chapter Cover fields */}
-                {selectedSpecial.type === "chapter_cover" && (
-                  <>
-                    <div>
-                      <label className="text-xs text-gray-500 font-semibold mb-1 block">Chapter {(selectedSpecial.chapter ?? 0) + 1}</label>
-                      <p className="text-sm text-gray-800 font-bold bg-cream/50 rounded-lg p-3">{(selectedSpecial as any).chapter_title || "Untitled"}</p>
-                    </div>
-                    <div>
-                      <label className="text-xs text-gray-500 font-semibold mb-1 block">Chapter Summary</label>
-                      <p className="text-sm text-gray-700 bg-cream/50 rounded-lg p-3">{(selectedSpecial as any).chapter_summary || "No summary yet. Run preprocess to generate."}</p>
-                    </div>
-                    <div>
-                      <label className="text-xs text-gray-500 font-semibold mb-1 block">Characters in Chapter</label>
-                      <div className="flex flex-wrap gap-1.5">
-                        {(() => {
-                          const chSegs = segments.length > 0 ? segments : [];
-                          const charSet = new Set<string>();
-                          chSegs.forEach(s => s.characters_in_scene?.forEach((c: string) => charSet.add(c)));
-                          return Array.from(charSet).slice(0, 8).map(name => (
-                            <span key={name} className="px-2 py-0.5 bg-sage/30 text-[10px] rounded-full text-gray-700">{name}</span>
-                          ));
-                        })()}
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                {/* Back Cover fields */}
-                {selectedSpecial.type === "back_cover" && (
-                  <>
-                    <div>
-                      <label className="text-xs text-gray-500 font-semibold mb-1 block">Book Title</label>
-                      <p className="text-sm text-gray-800 font-bold bg-cream/50 rounded-lg p-3">{meta.title || bookId}</p>
-                    </div>
-                    <div>
-                      <label className="text-xs text-gray-500 font-semibold mb-1 block">Closing Text</label>
-                      <p className="text-sm text-gray-700 bg-cream/50 rounded-lg p-3">The End<br/>Thank you for reading!</p>
-                    </div>
-                    <div>
-                      <label className="text-xs text-gray-500 font-semibold mb-1 block">Style Reference</label>
-                      <p className="text-xs text-gray-500">Uses Book Cover as style reference for consistency</p>
-                    </div>
-                  </>
-                )}
-
-                <button
-                  onClick={async () => {
-                    const spType = selectedSpecial.type;
-                    const spChapter = selectedSpecial.chapter ?? 0;
-                    setRegenSpecial(true);
-                    try {
-                      await regenerateSpecialPage(bookId, spType, spChapter);
-                      // Poll until the special page URL appears
-                      await new Promise<void>((resolve) => {
-                        const poll = setInterval(async () => {
-                          try {
-                            const data = await getSpecialPages(bookId);
-                            const found = data.pages.find(p => p.type === spType && (p.chapter ?? 0) === spChapter);
-                            if (found?.url) {
-                              clearInterval(poll);
-                              setSpecialPages(data.pages || []);
-                              setSelectedSpecial(found);
-                              setSpecialCacheBust(Date.now());
-                              setRegenSpecial(false);
-                              resolve();
-                            }
-                          } catch {}
-                        }, 5000);
-                        setTimeout(() => { clearInterval(poll); setRegenSpecial(false); resolve(); }, 120000);
-                      });
-                    } catch { setRegenSpecial(false); }
-                  }}
-                  disabled={regenSpecial}
-                  className="btn-primary text-sm !px-4 !py-2 flex items-center gap-1.5 w-full justify-center"
-                >
-                  <RefreshCw size={14} className={regenSpecial ? "animate-spin" : ""} />
-                  {regenSpecial ? "Generating..." : selectedSpecial.url ? "Regenerate" : "Generate"}
-                </button>
-              </div>
-            </div>
+            <SpecialPageView
+              canGenerate={canEdit}
+              special={selectedSpecial}
+              meta={meta}
+              bookId={bookId}
+              characters={characters}
+              sheets={sheets}
+              segments={segments}
+              specialCacheBust={specialCacheBust}
+              regenSpecial={regenSpecial}
+              onRegenerate={handleRegenSpecial}
+            />
           ) : selectedSegment ? (
             <>
               {/* Col 1: Illustration + Original Text */}
@@ -1373,6 +1219,7 @@ export default function EditorPage() {
                         value=""
                         onChange={(e) => {
                           if (!e.target.value || !selectedSegment) return;
+                          dirtySegIds.current.add(selectedSegment.id);
                           const name = e.target.value;
                           const actions = [...(selectedSegment.character_actions || []), { name, action: "" }];
                           const updated = {
@@ -1466,7 +1313,7 @@ export default function EditorPage() {
                   </button>
                   <button
                     onClick={handleRegenerate}
-                    disabled={regenerating || saving}
+                    disabled={regenerating || saving || !canEdit}
                     className="btn-primary text-xs !px-3 !py-1.5 flex items-center gap-1"
                   >
                     <RefreshCw size={12} className={regenerating ? "animate-spin" : ""} />
@@ -1491,6 +1338,7 @@ export default function EditorPage() {
                   portraits={portraits}
                   locations={locations}
                   sceneSheets={sceneSheets}
+                  cacheBust={sheetCacheBust}
                   bookId={bookId}
                   onRegenerateSheet={handleRegenerateSheet}
                   onNavigateToCharacter={(charName) => {

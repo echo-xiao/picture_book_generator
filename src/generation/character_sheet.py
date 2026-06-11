@@ -33,6 +33,10 @@ _client: genai.Client | None = None
 
 def _get_client() -> genai.Client:
     global _client
+    # BYOK: a per-request user key must not reuse the cached project client.
+    from src.gemini_backend import get_user_api_key
+    if get_user_api_key():
+        return make_genai_client()
     if _client is None:
         _client = make_genai_client()
     return _client
@@ -394,16 +398,15 @@ def generate_character_sheets(
     output_dir = GENERATED_DIR / book_id / "characters"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Filter to real characters
-    MIN_MENTIONS = 5
+    # Filter to real characters. (No caller ever sets mention_count, so the old
+    # `mention_count >= 5` condition always failed and silently capped at 10.)
     main_chars = [
         p for p in character_profiles
         if p.get("role") in ("main", "supporting")
-        and p.get("mention_count", 0) >= MIN_MENTIONS
     ]
     if not main_chars:
-        main_chars = sorted(character_profiles, key=lambda p: p.get("mention_count", 0), reverse=True)[:10]
-    if max_characters > 0:
+        main_chars = list(character_profiles)
+    if max_characters:
         main_chars = main_chars[:max_characters]
 
     logger.info("Generating portraits + sheets for %d characters", len(main_chars))

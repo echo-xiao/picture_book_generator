@@ -3,30 +3,17 @@
 import { useState } from "react";
 import { UploadForm } from "@/components/UploadForm";
 import { GenerationProgress } from "@/components/GenerationProgress";
-import { BookReader } from "@/components/BookReader";
 import { BookLibrary } from "@/components/BookLibrary";
-import type { PictureBook, GenerationConfig } from "@/types";
 
-type View = "home" | "generating" | "reading" | "library";
+type View = "home" | "generating" | "library";
 
 export default function Home() {
   const [view, setView] = useState<View>("home");
   const [bookId, setBookId] = useState<string>("");
-  const [book, setBook] = useState<PictureBook | null>(null);
 
   const handleStartGeneration = (id: string) => {
     setBookId(id);
     setView("generating");
-  };
-
-  const handleGenerationComplete = (completedBook: PictureBook) => {
-    setBook(completedBook);
-    setView("reading");
-  };
-
-  const handleSelectBook = (selectedBook: PictureBook) => {
-    setBook(selectedBook);
-    setView("reading");
   };
 
   return (
@@ -62,12 +49,6 @@ export default function Home() {
             </button>
             <button
               onClick={() => setView("library")}
-              className="px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 hover:bg-peach/50 transition-all"
-            >
-              Editor
-            </button>
-            <button
-              onClick={() => setView("library")}
               className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
                 view === "library"
                   ? "bg-coral text-white shadow-md"
@@ -93,18 +74,9 @@ export default function Home() {
           </div>
         )}
         {view === "generating" && (
-          <GenerationProgress
-            bookId={bookId}
-            onComplete={handleGenerationComplete}
-            onBack={() => setView("home")}
-          />
+          <GenerationProgress bookId={bookId} onBack={() => setView("home")} />
         )}
-        {view === "reading" && book && (
-          <BookReader book={book} onBack={() => setView("home")} />
-        )}
-        {view === "library" && (
-          <BookLibrary onSelectBook={handleSelectBook} />
-        )}
+        {view === "library" && <BookLibrary />}
       </div>
     </main>
   );

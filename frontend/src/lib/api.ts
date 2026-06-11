@@ -1,9 +1,22 @@
 import axios from "axios";
-import type { GenerationConfig, GenerationStatus, PictureBook } from "@/types";
+import type { GenerationConfig, PictureBook } from "@/types";
 
 const api = axios.create({
   baseURL: "/api",
   timeout: 300000,
+});
+
+// BYOK: attach the visitor's own Gemini key (+ email) to every request from
+// localStorage. Generation endpoints require it server-side (403 otherwise) and
+// bill it to the user's quota; read-only endpoints simply ignore it.
+api.interceptors.request.use((config) => {
+  if (typeof window !== "undefined") {
+    const key = localStorage.getItem("pbg_api_key");
+    const email = localStorage.getItem("pbg_email");
+    if (key) config.headers["X-Gemini-Key"] = key;
+    if (email) config.headers["X-User-Email"] = email;
+  }
+  return config;
 });
 
 export async function fetchBookFromUrl(url: string): Promise<{ text: string; title: string }> {
@@ -30,19 +43,9 @@ export async function uploadAndGenerate(
   return data;
 }
 
-export async function getStatus(bookId: string): Promise<GenerationStatus> {
-  const { data } = await api.get(`/status/${bookId}`);
-  return data;
-}
-
-export async function getBook(bookId: string): Promise<PictureBook> {
-  const { data } = await api.get(`/book/${bookId}`);
-  return data;
-}
-
-export async function getBookHtml(bookId: string): Promise<string> {
-  const { data } = await api.get(`/book/${bookId}/html`);
-  return data;
+export async function getConfig() {
+  const { data } = await api.get("/config");
+  return data as { require_user_key: boolean };
 }
 
 export async function listBooks(): Promise<PictureBook[]> {

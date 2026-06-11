@@ -1,8 +1,7 @@
 "use client";
 
-import { useState, useRef } from "react";
-import { startGeneration, uploadAndGenerate } from "@/lib/api";
-import type { GenerationConfig } from "@/types";
+import { useState, useRef, useEffect } from "react";
+import { startGeneration, uploadAndGenerate, getConfig } from "@/lib/api";
 
 interface Props {
   onStartGeneration: (bookId: string) => void;
@@ -29,39 +28,34 @@ export function UploadForm({ onStartGeneration }: Props) {
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [url, setUrl] = useState("");
-  const [config, setConfig] = useState<GenerationConfig>({
-    age_group: "4-6",
-    num_pages: 10,
-    template: "classic",
-  });
   const [educationGoal, setEducationGoal] = useState("");
   const [email, setEmail] = useState(() => typeof window !== "undefined" ? localStorage.getItem("pbg_email") || "" : "");
   const [apiKey, setApiKey] = useState(() => typeof window !== "undefined" ? localStorage.getItem("pbg_api_key") || "" : "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  // Whether the backend enforces BYOK (REQUIRE_USER_KEY). Off by default → key optional.
+  const [requireKey, setRequireKey] = useState(false);
+  useEffect(() => {
+    getConfig().then(c => setRequireKey(!!c.require_user_key)).catch(() => {});
+  }, []);
 
   const handleSubmit = async () => {
     setError("");
 
-    if (!email.trim()) {
-      setError("Please enter your email address.");
-      return;
-    }
-    if (!apiKey.trim()) {
-      setError("Please enter your Gemini API key.");
+    if (requireKey && !apiKey.trim()) {
+      setError("Please enter your Gemini API key (required to generate).");
       return;
     }
 
-    // Persist for convenience
-    localStorage.setItem("pbg_email", email.trim());
-    localStorage.setItem("pbg_api_key", apiKey.trim());
+    // Persist for convenience (only what was provided)
+    if (email.trim()) localStorage.setItem("pbg_email", email.trim());
+    if (apiKey.trim()) localStorage.setItem("pbg_api_key", apiKey.trim());
 
     setLoading(true);
 
     try {
       const finalConfig = {
-        ...config,
         ...(educationGoal ? { education_goal: educationGoal } : {}),
         email: email.trim(),
         gemini_api_key: apiKey.trim(),
@@ -214,7 +208,7 @@ export function UploadForm({ onStartGeneration }: Props) {
               <input
                 ref={fileRef}
                 type="file"
-                accept=".txt,.pdf,.epub"
+                accept=".txt"
                 className="hidden"
                 onChange={(e) => setFile(e.target.files?.[0] || null)}
               />
@@ -227,7 +221,7 @@ export function UploadForm({ onStartGeneration }: Props) {
                     Drop a file here or click to browse
                   </p>
                   <p className="text-sm text-gray-400 mt-1">
-                    Supports .txt, .pdf, .epub
+                    Supports .txt
                   </p>
                 </>
               )}

@@ -27,24 +27,13 @@ class BookInput(BaseModel):
 
 
 class GenerationConfig(BaseModel):
-    """Configurable knobs for the generation pipeline."""
+    """Configurable knobs for the generation pipeline.
 
-    age_group: str = Field(default="4-6", description="Target age range (e.g. '2-4', '4-6', '6-8').")
-    num_pages: int = Field(default=10, ge=1, le=40, description="Desired number of pages.")
-    template: str = Field(default="classic", description="Story template key (classic / journey / simple).")
-    style: Optional[str] = Field(default=None, description="Optional illustration style override.")
-    selected_chapters: Optional[list[int]] = Field(
-        default=None,
-        description="Indices of chapters to include (None = all).",
-    )
-    education_goal: Optional[str] = Field(
-        default=None,
-        description="Optional educational objective for the book.",
-    )
-    language: str = Field(
-        default="en",
-        description="Output language for the picture book text ('en', 'zh', etc.).",
-    )
+    Only email + gemini_api_key are read by the routes; the old per-book knobs
+    (age/pages/template/...) were silently ignored and have been removed.
+    Pydantic ignores extra client fields by default, so old frontends still work.
+    """
+
     email: Optional[str] = Field(default=None, description="User's email address.")
     gemini_api_key: Optional[str] = Field(default=None, description="User's Gemini API key.")
 

@@ -5,7 +5,8 @@ import { listPreprocessedBooks } from "@/lib/api";
 import type { PictureBook } from "@/types";
 
 interface Props {
-  onSelectBook: (book: PictureBook) => void;
+  // Optional — the library navigates via <a href>/window.location, not this callback.
+  onSelectBook?: (book: PictureBook) => void;
 }
 
 interface BookEntry {

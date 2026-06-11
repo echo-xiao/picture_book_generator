@@ -57,17 +57,10 @@ def _build_reference_content(
             continue
         if in_scene_names:
             name_lower = char_name.lower()
-            name_parts = name_lower.split()
-            first_name = name_parts[0]
-            last_name = name_parts[-1] if len(name_parts) > 1 else ""
-            is_match = any(
-                name_lower == n.lower()
-                or first_name == n.lower().split()[0]
-                or (last_name and last_name == n.lower().split()[-1])
-                or any(p in n.lower() for p in name_parts if len(p) > 3)
-                or any(p in name_lower for p in n.lower().split() if len(p) > 3)
-                for n in in_scene_names
-            )
+            # Exact full-name match only. The old first-name/last-name/substring
+            # fallbacks cross-matched e.g. "Madame Defarge" into a scene with only
+            # "Monsieur Defarge", injecting the wrong reference sheet as COPY EXACTLY.
+            is_match = any(name_lower == n.lower() for n in in_scene_names)
             if is_match:
                 matched_sheets.append(sheet)
             else:

@@ -131,7 +131,9 @@ def simplify_text(
             logger.info("Simplifying page %d/%d", i + 1, len(scenes))
             if prev_text:
                 scene = {**scene, "previous_page_text": prev_text}
-            result = simplify_text([scene], age_group, original_text, language, characters)
+            # Pass character_sheets through — omitting it dropped every VISUAL:
+            # line from the per-page prompt in real (multi-page) generation.
+            result = simplify_text([scene], age_group, original_text, language, characters, character_sheets)
             if result:
                 # Keep the scene's real page number — sequential renumbering
                 # breaks partial runs (e.g. --pages 13,29 became pages 4,5)
@@ -217,7 +219,9 @@ def simplify_text(
 
         output.append({
             **scene,
-            "page_number": i + 1,
+            # Keep the scene's real page number — `i + 1` is always 1 on the
+            # single-scene path and clobbered partial runs (e.g. --pages 13).
+            "page_number": scene.get("page_number", i + 1),
             "page_text": page_text,
             "scene_direction": scene_direction,
             "word_count": len(page_text.split()),

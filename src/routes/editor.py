@@ -6,16 +6,26 @@ import json
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+import asyncio
+
 from src.config import GENERATED_DIR
-from src.routes.helpers import _load_json, _save_json
+from src.routes.helpers import _load_json, _require_user_key, _save_json
 from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Per-book lock so concurrent edits serialize their analysis.json read-modify-write
+# instead of clobbering each other (last-writer-wins lost updates).
+_analysis_locks: dict[str, asyncio.Lock] = {}
+
+
+def _analysis_lock(book_id: str) -> asyncio.Lock:
+    return _analysis_locks.setdefault(book_id, asyncio.Lock())
 
 
 @router.get("/api/book/{book_id}/preprocess/chapters")
@@ -84,15 +94,107 @@ class CharacterUpdate(BaseModel):
     visual_details: Optional[dict[str, Any]] = None
 
 
+def _cascade_character_rename(book_id: str, old_name: str, new_name: str) -> None:
+    """Propagate a character rename everywhere the old name is referenced.
+
+    update_character only renames the one character row; without this every
+    segment's characters_in_scene / character_actions (across ALL chapters), the
+    alias map, the gender map and the sheet/portrait image files keep the stale
+    name, so a rename silently half-applies and reverts on refresh.
+    """
+    if not new_name or old_name == new_name:
+        return
+
+    # 1) Segments across ALL chapters (analysis.json is the editor's source of truth)
+    analysis = _load_json(book_id, "analysis.json")
+    changed_ids: list = []
+    if analysis:
+        for seg in analysis.get("segments", []):
+            touched = False
+            cis = seg.get("characters_in_scene")
+            if isinstance(cis, list) and old_name in cis:
+                seg["characters_in_scene"] = [new_name if c == old_name else c for c in cis]
+                touched = True
+            for action in seg.get("character_actions", []) or []:
+                if isinstance(action, dict) and action.get("name") == old_name:
+                    action["name"] = new_name
+                    touched = True
+            if touched:
+                changed_ids.append(seg.get("id"))
+        if changed_ids:
+            _save_json(book_id, "analysis.json", analysis)
+
+    # 2) Alias map — repoint both alias keys and canonical values
+    alias_map = _load_json(book_id, "alias_map.json") or {}
+    if alias_map:
+        remapped = {}
+        for alias, canon in alias_map.items():
+            alias = new_name if alias == old_name else alias
+            canon = new_name if canon == old_name else canon
+            remapped[alias] = canon
+        _save_json(book_id, "alias_map.json", remapped)
+
+    # 3) Gender map key
+    genders = _load_json(book_id, "character_genders.json") or {}
+    if old_name in genders:
+        genders[new_name] = genders.pop(old_name)
+        _save_json(book_id, "character_genders.json", genders)
+
+    # 4) Rename sheet / portrait / history image files
+    from src.generation.character_sheet import _safe_filename
+    chars_dir = GENERATED_DIR / book_id / "characters"
+    old_safe, new_safe = _safe_filename(old_name), _safe_filename(new_name)
+    if chars_dir.exists() and old_safe != new_safe:
+        targets = list(chars_dir.glob(f"{old_safe}_*"))
+        hist = chars_dir / "history"
+        if hist.exists():
+            targets += list(hist.glob(f"{old_safe}_*"))
+        for f in targets:
+            try:
+                f.rename(f.with_name(f.name.replace(old_safe, new_safe, 1)))
+            except OSError as e:
+                logger.warning("Sheet rename failed for %s: %s", f.name, e)
+
+    # 5) Sync changed segments to MongoDB
+    if changed_ids and analysis:
+        try:
+            from src.core.db import update_segment as db_update_segment
+            by_id = {s.get("id"): s for s in analysis.get("segments", [])}
+            for seg_id in changed_ids:
+                seg = by_id.get(seg_id)
+                if seg is not None:
+                    db_update_segment(book_id, seg_id, {
+                        "characters_in_scene": seg.get("characters_in_scene", []),
+                        "character_actions": seg.get("character_actions", []),
+                    })
+        except Exception as e:
+            logger.debug("Mongo segment cascade skipped: %s", e)
+
+
 @router.put("/api/book/{book_id}/preprocess/characters/{char_name}")
 async def update_character(book_id: str, char_name: str, update: CharacterUpdate) -> dict[str, Any]:
-    """Update a character's profile."""
+    """Update a character's profile (cascades a rename across the whole book)."""
     update_dict = update.model_dump(exclude_none=True)
+    new_name = (update_dict.get("canonical_name") or char_name).strip() or char_name
+    renamed = new_name != char_name
 
     llm_chars = _load_json(book_id, "llm_characters.json")
     target = None
     if llm_chars:
         target = next((c for c in llm_chars.get("characters", []) if c.get("canonical_name") == char_name), None)
+
+    # Reject a rename that collides with another existing character, rather than
+    # silently merging the two (which would corrupt segment references).
+    if renamed:
+        existing = {c.get("canonical_name") for c in (llm_chars or {}).get("characters", [])}
+        if not existing:
+            try:
+                from src.core.db import get_characters as _db_chars
+                existing = {c.get("canonical_name") for c in _db_chars(book_id)}
+            except Exception:
+                existing = set()
+        if new_name in existing:
+            raise HTTPException(status_code=409, detail=f"A character named '{new_name}' already exists.")
 
     if target is None:
         # llm_characters.json is missing or blanked (e.g. after a failed re-preprocess).
@@ -100,7 +202,9 @@ async def update_character(book_id: str, char_name: str, update: CharacterUpdate
         try:
             from src.core.db import update_character as db_update_char, is_available
             if is_available() and db_update_char(book_id, char_name, update_dict):
-                return {"status": "updated", "character": char_name,
+                if renamed:
+                    _cascade_character_rename(book_id, char_name, new_name)
+                return {"status": "updated", "character": new_name,
                         "updated_fields": list(update_dict.keys())}
         except Exception as e:
             logger.warning("MongoDB character update failed for %s: %s", char_name, e)
@@ -135,7 +239,10 @@ async def update_character(book_id: str, char_name: str, update: CharacterUpdate
     except Exception as e:
         logger.debug("MongoDB sync skipped for character %s: %s", char_name, e)
 
-    return {"status": "updated", "character": char_name, "updated_fields": list(update_dict.keys())}
+    if renamed:
+        _cascade_character_rename(book_id, char_name, new_name)
+
+    return {"status": "updated", "character": new_name, "updated_fields": list(update_dict.keys())}
 
 
 @router.post("/api/book/{book_id}/preprocess/characters/{char_name}/autofill")
@@ -216,10 +323,11 @@ async def get_special_pages(book_id: str) -> dict[str, Any]:
         ch_info = ch_segments[ch_key]
         ch_num = int(ch_key)
 
-        # Chapter cover
+        # Chapter cover. Files are named 1-based (chapter_01 for chapter 0) by the
+        # pipeline + PDF; ch_num here is 0-based, so +1 to read the right file.
         cover_url = None
         for ext in (".png", ".jpg"):
-            p = special_dir / f"chapter_{ch_num:02d}_cover{ext}"
+            p = special_dir / f"chapter_{ch_num + 1:02d}_cover{ext}"
             if p.exists():
                 cover_url = f"/static/{book_id}/special/{p.name}"
                 break
@@ -232,10 +340,10 @@ async def get_special_pages(book_id: str) -> dict[str, Any]:
             "url": cover_url,
         })
 
-        # Chapter ending
+        # Chapter ending (1-based file name; ch_num is 0-based → +1)
         ending_url = None
         for ext in (".png", ".jpg"):
-            p = special_dir / f"chapter_{ch_num:02d}_ending{ext}"
+            p = special_dir / f"chapter_{ch_num + 1:02d}_ending{ext}"
             if p.exists():
                 ending_url = f"/static/{book_id}/special/{p.name}"
                 break
@@ -301,12 +409,69 @@ async def update_scene(book_id: str, scene_name: str, update: SceneUpdate) -> di
     if target is None:
         raise HTTPException(status_code=404, detail=f"Scene '{scene_name}' not found.")
 
+    new_name = (update_dict.get("name") or scene_name).strip() or scene_name
+
+    # Reject a rename that collides with another existing location.
+    if new_name != scene_name:
+        others = {l.get("name") for l in (llm_locs or {}).get("locations", []) if l is not target}
+        if new_name in others:
+            raise HTTPException(status_code=409, detail=f"A location named '{new_name}' already exists.")
+
     for key, value in update_dict.items():
         target[key] = value
 
     _save_json(book_id, "llm_locations.json", llm_locs)
 
-    return {"status": "updated", "scene": scene_name, "updated_fields": list(update_dict.keys())}
+    # Rename the scene reference sheet files so they keep matching the new name
+    # (otherwise sceneSheets[new_name] finds nothing and the image "disappears").
+    if new_name != scene_name:
+        from src.generation.character_sheet import _safe_filename
+        scenes_dir = GENERATED_DIR / book_id / "scenes"
+        old_safe, new_safe = _safe_filename(scene_name), _safe_filename(new_name)
+        if scenes_dir.exists() and old_safe != new_safe:
+            targets = list(scenes_dir.glob(f"{old_safe}_scene*"))
+            hist = scenes_dir / "history"
+            if hist.exists():
+                targets += list(hist.glob(f"{old_safe}_scene_*"))
+            for f in targets:
+                try:
+                    f.rename(f.with_name(f.name.replace(old_safe, new_safe, 1)))
+                except OSError as e:
+                    logger.warning("Scene sheet rename failed for %s: %s", f.name, e)
+
+        # Locations are matched to pages by the old name appearing in the segment
+        # prose, so rewrite old->new in scene_background / scene_summary too —
+        # otherwise a renamed location stops matching its pages.
+        import re as _re2
+        analysis = _load_json(book_id, "analysis.json")
+        if analysis:
+            pat = _re2.compile(r"\b" + _re2.escape(scene_name) + r"\b", _re2.IGNORECASE)
+            changed: list = []
+            for seg in analysis.get("segments", []):
+                touched = False
+                for fld in ("scene_background", "scene_summary"):
+                    val = seg.get(fld)
+                    if isinstance(val, str) and pat.search(val):
+                        seg[fld] = pat.sub(new_name, val)
+                        touched = True
+                if touched:
+                    changed.append(seg.get("id"))
+            if changed:
+                _save_json(book_id, "analysis.json", analysis)
+                try:
+                    from src.core.db import update_segment as db_update_segment
+                    by_id = {s.get("id"): s for s in analysis.get("segments", [])}
+                    for sid in changed:
+                        s = by_id.get(sid)
+                        if s is not None:
+                            db_update_segment(book_id, sid, {
+                                "scene_background": s.get("scene_background", ""),
+                                "scene_summary": s.get("scene_summary", ""),
+                            })
+                except Exception as e:
+                    logger.debug("Mongo scene-text cascade skipped: %s", e)
+
+    return {"status": "updated", "scene": new_name, "updated_fields": list(update_dict.keys())}
 
 
 @router.get("/api/book/{book_id}/preprocess/scenes/{scene_name}/history")
@@ -421,29 +586,40 @@ class SegmentUpdate(BaseModel):
 @router.put("/api/book/{book_id}/segment/{seg_id}")
 async def update_segment(book_id: str, seg_id: int, update: SegmentUpdate) -> dict[str, Any]:
     """Update a single segment's fields."""
-    analysis = _load_json(book_id, "analysis.json")
-    if not analysis:
-        raise HTTPException(status_code=404, detail="No analysis data found.")
-
-    segments = analysis.get("segments", [])
-    target = None
-    for seg in segments:
-        if seg.get("id") == seg_id:
-            target = seg
-            break
-
-    if target is None:
-        raise HTTPException(status_code=404, detail=f"Segment {seg_id} not found.")
-
-    # Apply updates
     update_dict = update.model_dump(exclude_none=True)
-    for key, value in update_dict.items():
-        target[key] = value
+    # Serialize the read-modify-write so two concurrent edits to the same book
+    # can't lose each other's updates.
+    async with _analysis_lock(book_id):
+        analysis = _load_json(book_id, "analysis.json")
+        if not analysis:
+            raise HTTPException(status_code=404, detail="No analysis data found.")
+        target = next((s for s in analysis.get("segments", []) if s.get("id") == seg_id), None)
+        if target is None:
+            raise HTTPException(status_code=404, detail=f"Segment {seg_id} not found.")
+        for key, value in update_dict.items():
+            target[key] = value
+        _save_json(book_id, "analysis.json", analysis)
 
-    # Save back to JSON
-    _save_json(book_id, "analysis.json", analysis)
+    # The page text changed — the cached text-image-match verdict is stale now,
+    # so drop it (best-effort) rather than keep reporting the old result.
+    if "simplified_text" in update_dict or "text" in update_dict:
+        try:
+            ch_idx = target.get("chapter_idx", 0)
+            ch_segments = sorted(
+                [s for s in analysis.get("segments", []) if s.get("chapter_idx") == ch_idx],
+                key=lambda s: s.get("id", 0),
+            )
+            page_num = next((i + 1 for i, s in enumerate(ch_segments) if s.get("id") == seg_id), 1)
+            quality_file = (
+                GENERATED_DIR / book_id / "chapters" / f"ch{ch_idx:02d}"
+                / "quality" / f"page_{page_num:03d}_quality.json"
+            )
+            if quality_file.exists():
+                quality_file.unlink()
+        except OSError as e:
+            logger.debug("Could not invalidate quality cache for segment %d: %s", seg_id, e)
 
-    # Sync to MongoDB
+    # Sync to MongoDB (separate store — outside the file lock)
     try:
         from src.core.db import update_segment as db_update_segment
         db_update_segment(book_id, seg_id, update_dict)
@@ -513,7 +689,10 @@ async def get_segment_illustration_history(book_id: str, seg_id: int) -> dict[st
 
 
 @router.post("/api/book/{book_id}/segment/{seg_id}/simplify")
-async def simplify_segment_text(book_id: str, seg_id: int) -> dict[str, Any]:
+async def simplify_segment_text(
+    book_id: str, seg_id: int,
+    user_key: str = Depends(_require_user_key),  # BYOK 403 gate; key routed by BYOKMiddleware
+) -> dict[str, Any]:
     """Generate simplified text for a single segment."""
     analysis = _load_json(book_id, "analysis.json")
     if not analysis:
@@ -542,7 +721,10 @@ async def simplify_segment_text(book_id: str, seg_id: int) -> dict[str, Any]:
 
 
 @router.post("/api/book/{book_id}/segment/{seg_id}/background")
-async def generate_segment_background(book_id: str, seg_id: int) -> dict[str, Any]:
+async def generate_segment_background(
+    book_id: str, seg_id: int,
+    user_key: str = Depends(_require_user_key),  # BYOK 403 gate; key routed by BYOKMiddleware
+) -> dict[str, Any]:
     """Generate scene background description for a single segment."""
     analysis = _load_json(book_id, "analysis.json")
     if not analysis:
@@ -583,7 +765,10 @@ Return JSON: {{"scene_background": "detailed visual description..."}}"""
 
 
 @router.post("/api/book/{book_id}/segment/{seg_id}/summarize")
-async def summarize_segment(book_id: str, seg_id: int) -> dict[str, Any]:
+async def summarize_segment(
+    book_id: str, seg_id: int,
+    user_key: str = Depends(_require_user_key),  # BYOK 403 gate; key routed by BYOKMiddleware
+) -> dict[str, Any]:
     """Generate summary and sentiment for a single segment."""
     analysis = _load_json(book_id, "analysis.json")
     if not analysis:
@@ -617,7 +802,10 @@ class ChatRequest(BaseModel):
 
 
 @router.post("/api/book/{book_id}/segment/{seg_id}/chat")
-async def chat_segment_prompt(book_id: str, seg_id: int, req: ChatRequest) -> dict[str, Any]:
+async def chat_segment_prompt(
+    book_id: str, seg_id: int, req: ChatRequest,
+    user_key: str = Depends(_require_user_key),  # BYOK 403 gate; key routed by BYOKMiddleware
+) -> dict[str, Any]:
     """AI assistant to help generate/refine illustration prompt fields via chat."""
     analysis = _load_json(book_id, "analysis.json")
     if not analysis:

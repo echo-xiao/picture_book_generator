@@ -16,6 +16,7 @@ interface CharacterManagementProps {
   onCharactersUpdate: (characters: CharacterInfo[], sheets: Record<string, string>, renamedFrom?: string, renamedTo?: string) => void;
   navigateToChar?: string | null;
   onSelectChar?: (name: string) => void;
+  canGenerate?: boolean;
 }
 
 export default function CharacterManagement({
@@ -26,6 +27,7 @@ export default function CharacterManagement({
   onCharactersUpdate,
   navigateToChar,
   onSelectChar,
+  canGenerate = true,
 }: CharacterManagementProps) {
   const [selectedChar, setSelectedChar] = useState<string | null>(characters[0]?.canonical_name || null);
   const [editing, setEditing] = useState<Record<string, any>>({});
@@ -95,10 +97,15 @@ export default function CharacterManagement({
       .catch(() => { setSheetHistory([]); });
   }, [bookId, selectedChar, regenning]);
 
-  // Auto-select first character on mount
-  if (selected && Object.keys(editing).length === 0) {
-    selectChar(selected);
-  }
+  // Auto-select first character once data is available. In an effect, not the
+  // render body — calling setState (selectChar) during render warns under
+  // StrictMode and can loop.
+  useEffect(() => {
+    if (selected && Object.keys(editing).length === 0) {
+      selectChar(selected);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
 
   const handleSave = async () => {
     if (!selectedChar) return;
@@ -125,9 +132,10 @@ export default function CharacterManagement({
     }
   };
 
-  const handleRegenSheet = async () => {
-    if (!selectedChar) return;
-    const charName = selectedChar;
+  // Regenerate a character's sheet BY NAME (not the possibly-stale selectedChar),
+  // poll until it lands, bust the preview cache, then auto quality-check.
+  // Does NOT refresh the parent — the caller does that with the right rename args.
+  const regenAndCheck = async (charName: string) => {
     setRegenning(true);
     setQualityResult(null);
     try {
@@ -139,27 +147,23 @@ export default function CharacterManagement({
             const hist = await getCharacterSheetHistory(bookId, charName);
             if (hist.images?.some(img => img.version === "current")) {
               clearInterval(poll);
-              const data = await getCharacters(bookId);
-              onCharactersUpdate(data.characters || [], data.sheets || {});
-              setRegenning(false);
               resolve();
             }
           } catch {}
         }, 5000);
-        setTimeout(() => { clearInterval(poll); setRegenning(false); resolve(); }, 120000);
+        setTimeout(() => { clearInterval(poll); resolve(); }, 120000);
       });
       setSheetCacheBust(Date.now());  // force big preview + Current thumbnail to reload
-      // Auto quality check after generation completes
-      setCheckingQuality(true);
-      try {
-        const result = await checkCharacterSheetQuality(bookId, charName);
-        setQualityResult(result);
-      } catch {} finally {
-        setCheckingQuality(false);
-      }
-    } catch (e) {
-      console.error("Regen failed:", e);
+    } finally {
       setRegenning(false);
+    }
+    // Auto quality check after generation completes
+    setCheckingQuality(true);
+    try {
+      const result = await checkCharacterSheetQuality(bookId, charName);
+      setQualityResult(result);
+    } catch {} finally {
+      setCheckingQuality(false);
     }
   };
 
@@ -560,25 +564,34 @@ export default function CharacterManagement({
                 onClick={async () => {
                   if (!selectedChar) return;
                   const oldName = selectedChar;
-                  const newName = editing.canonical_name || oldName;
+                  const newName = (editing.canonical_name || oldName).trim() || oldName;
+                  const renamed = oldName !== newName;
                   setSaving(true);
                   try {
-                    await updateCharacter(bookId, selectedChar, editing);
-                    await handleRegenSheet();
-                    const data = await getCharacters(bookId);
+                    await updateCharacter(bookId, oldName, editing);
+                    // Refresh parent + switch selection to the new name UP FRONT,
+                    // so the panel keeps the character selected (and regen targets
+                    // the right sheet) while the slow regeneration runs.
+                    const pre = await getCharacters(bookId);
                     onCharactersUpdate(
-                      data.characters || [],
-                      data.sheets || {},
-                      oldName !== newName ? oldName : undefined,
-                      oldName !== newName ? newName : undefined,
+                      pre.characters || [],
+                      pre.sheets || {},
+                      renamed ? oldName : undefined,
+                      renamed ? newName : undefined,
                     );
-                  } catch (e) {
+                    if (renamed) setSelectedChar(newName);
+                    await regenAndCheck(newName);
+                    const post = await getCharacters(bookId);
+                    onCharactersUpdate(post.characters || [], post.sheets || {});
+                  } catch (e: any) {
                     console.error("Save & regen failed:", e);
+                    const msg = e?.response?.data?.detail || e?.message || String(e);
+                    alert(`Generate failed: ${msg}`);
                   } finally {
                     setSaving(false);
                   }
                 }}
-                disabled={saving || regenning}
+                disabled={saving || regenning || !canGenerate}
                 className="btn-primary text-sm !px-4 !py-2 flex items-center gap-1.5"
               >
                 <RefreshCw size={14} className={saving || regenning ? "animate-spin" : ""} />

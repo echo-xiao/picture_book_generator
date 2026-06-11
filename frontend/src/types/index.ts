@@ -1,10 +1,9 @@
 export interface GenerationConfig {
-  age_group: "2-4" | "4-6" | "6-8";
-  num_pages: number;
-  template: "classic" | "journey" | "simple";
   style?: string;
   selected_chapters?: number[];
   education_goal?: string;
+  email?: string;
+  gemini_api_key?: string;
 }
 
 export interface PageData {

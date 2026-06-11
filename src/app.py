@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 
 import os
@@ -32,10 +33,33 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    # Wildcard origins + credentials is an invalid CORS combo; the SPA is served
+    # same-origin so cross-origin credentials are not needed.
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Book-id validation middleware — every /api/book/{book_id}/... route builds
+# filesystem paths from the raw path segment (GENERATED_DIR / book_id), so a
+# traversal value like ".." could read or delete outside the books tree.
+# Generated ids only ever contain word chars (incl. CJK), hyphens after
+# sanitize+lower (see routes/books.py), so anything else is rejected here once
+# rather than in every route.
+_BOOK_ID_RE = re.compile(r"^[\w\-]{1,100}$")
+_BOOK_PATH_RE = re.compile(r"^/api/(?:book|status)/([^/]+)")
+
+
+class BookIdValidationMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        m = _BOOK_PATH_RE.match(request.url.path)
+        if m and not _BOOK_ID_RE.match(m.group(1)):
+            return JSONResponse({"detail": "Invalid book id."}, status_code=400)
+        return await call_next(request)
+
+
+app.add_middleware(BookIdValidationMiddleware)
 
 
 # Request timeout middleware — prevent hung requests from blocking the server
@@ -48,6 +72,41 @@ class TimeoutMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(TimeoutMiddleware)
+
+
+# BYOK middleware — one place that (1) blocks generation endpoints when
+# REQUIRE_USER_KEY is on and no key is supplied, and (2) routes the caller's
+# Gemini key into the request context so in-request Gemini calls bill the user.
+# (Background-task generation also sets the key explicitly in its task closure /
+# subprocess env, since the request context is gone by the time those run.)
+_GEN_SUFFIXES = (
+    "/generate", "/regenerate", "/simplify", "/background",
+    "/summarize", "/chat", "/autofill", "/quality", "/consistency",
+)
+
+
+class BYOKMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        from src.gemini_backend import set_user_api_key, reset_user_api_key
+        from src.config import REQUIRE_USER_KEY
+
+        key = request.headers.get("x-gemini-key")
+        path = request.url.path
+        is_gen = request.method == "POST" and any(path.endswith(s) for s in _GEN_SUFFIXES)
+        if is_gen and REQUIRE_USER_KEY and not key:
+            return JSONResponse(
+                {"detail": "A Gemini API key is required to generate. Add yours on the Create page."},
+                status_code=403,
+            )
+        token = set_user_api_key(key) if key else None
+        try:
+            return await call_next(request)
+        finally:
+            if token is not None:
+                reset_user_api_key(token)
+
+
+app.add_middleware(BYOKMiddleware)
 
 # Serve generated images / assets — local first, fallback to GCS
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)

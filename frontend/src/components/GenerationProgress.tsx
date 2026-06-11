@@ -3,71 +3,86 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { getChapters } from "@/lib/api";
+import { AGENT_META, PREPROCESS_STEPS as STEPS } from "@/lib/agents";
 
 interface Props {
   bookId: string;
-  onComplete?: (book: any) => void;
   onBack: () => void;
 }
-
-const AGENT_LABELS: Record<string, { icon: string; name: string; color: string }> = {
-  analyzer: { icon: "\uD83D\uDD0D", name: "Analyzer Agent", color: "text-blue-600" },
-  writer: { icon: "\u270D\uFE0F", name: "Writer Agent", color: "text-purple-600" },
-  artist: { icon: "\uD83C\uDFA8", name: "Artist Agent", color: "text-pink-600" },
-  qa: { icon: "\u2705", name: "QA Agent", color: "text-green-600" },
-};
-
-const STEPS = [
-  { key: "extract_text", label: "Extracting text and chapters", agent: "analyzer" },
-  { key: "identify_characters", label: "Identifying characters with AI", agent: "analyzer" },
-  { key: "build_aliases", label: "Building alias map", agent: "analyzer" },
-  { key: "replace_aliases", label: "Replacing name aliases", agent: "analyzer" },
-  { key: "segment_text", label: "Segmenting into scenes", agent: "analyzer" },
-  { key: "annotate_complete", label: "Annotating characters, actions, sentiment", agent: "analyzer" },
-];
 
 export function GenerationProgress({ bookId, onBack }: Props) {
   const router = useRouter();
   const [progress, setProgress] = useState(0);
   const [loadingStatus, setLoadingStatus] = useState("Starting...");
   const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [preprocessProgress, setPreprocessProgress] = useState<any>(null);
 
   // Poll for preprocess progress + completion
   useEffect(() => {
     let timer: NodeJS.Timeout;
+    let redirectTimer: NodeJS.Timeout;
+    let cancelled = false;
 
     async function poll() {
       // Check progress endpoint
       try {
         const prog = await fetch(`/api/book/${bookId}/preprocess/progress`).then(r => r.json());
+        if (cancelled) return;
+        if (prog.status === "error") {
+          // Fatal preprocess error — stop polling, don't redirect
+          setError(prog.error || prog.step || "Preprocess failed");
+          return;
+        }
         setPreprocessProgress(prog);
         setProgress(prog.progress || 0);
         setLoadingStatus(prog.step || "Processing...");
       } catch {}
+      if (cancelled) return;
 
       // Check completion
       try {
         const data = await getChapters(bookId);
+        if (cancelled) return;
         if (data.chapters && Object.keys(data.chapters).length > 0) {
           setDone(true);
           setProgress(100);
-          setTimeout(() => {
+          redirectTimer = setTimeout(() => {
             router.push(`/editor/${bookId}`);
           }, 1500);
           return;
         }
       } catch {}
+      if (cancelled) return;
 
       timer = setTimeout(poll, 3000);
     }
 
     timer = setTimeout(poll, 3000);
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      clearTimeout(redirectTimer);
+    };
   }, [bookId, router]);
 
   const stepsDone = new Set(preprocessProgress?.steps_done || []);
-  const currentAgent = preprocessProgress?.agent ? AGENT_LABELS[preprocessProgress.agent] : null;
+  const currentAgent = preprocessProgress?.agent ? AGENT_META[preprocessProgress.agent] : null;
+
+  if (error) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <div className="text-center max-w-md w-full px-4">
+          <p className="text-5xl mb-4">⚠️</p>
+          <p className="text-gray-700 font-semibold mb-2">Preprocessing Failed</p>
+          <p className="text-red-500 text-sm mb-4">{error}</p>
+          <button onClick={onBack} className="text-sm text-gray-400 hover:text-gray-600 mt-4">
+            Back
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-[60vh] flex items-center justify-center">
@@ -80,7 +95,7 @@ export function GenerationProgress({ bookId, onBack }: Props) {
         {!done && currentAgent && (
           <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white shadow-sm border border-gray-100 mb-2 ${currentAgent.color}`}>
             <span className="text-sm">{currentAgent.icon}</span>
-            <span className="text-xs font-semibold">{currentAgent.name}</span>
+            <span className="text-xs font-semibold">{currentAgent.fullName}</span>
           </div>
         )}
         <p className="text-gray-500 text-sm mb-2">
@@ -101,7 +116,7 @@ export function GenerationProgress({ bookId, onBack }: Props) {
           {STEPS.map((s, idx) => {
             const isDone = stepsDone.has(s.key);
             const isCurrent = !isDone && idx === STEPS.findIndex(st => !stepsDone.has(st.key));
-            const agentInfo = AGENT_LABELS[s.agent];
+            const agentInfo = AGENT_META[s.agent];
             return (
               <div key={s.key} className={`flex items-center gap-2 ${
                 isDone ? "text-gray-400" : isCurrent ? "text-coral font-semibold" : "text-gray-300"

@@ -9,15 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from src.config import GENERATED_DIR
 from src.core.models import GenerationConfig
 from src.core.pipeline import (
     delete_book,
-    get_book,
-    get_status,
     list_books,
 )
 
@@ -38,23 +35,40 @@ async def fetch_book_from_url(req: FetchUrlRequest) -> dict[str, Any]:
     import socket
     from urllib.parse import urlparse
 
-    parsed = urlparse(req.url)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        raise HTTPException(status_code=400, detail="Only http/https URLs are allowed")
-    try:
-        resolved = socket.getaddrinfo(parsed.hostname, None)
-    except socket.gaierror:
-        raise HTTPException(status_code=400, detail="Could not resolve URL host")
-    for info in resolved:
-        ip = ipaddress.ip_address(info[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-            raise HTTPException(status_code=400, detail="URL resolves to a disallowed address")
+    def _check_host(u: str) -> None:
+        p = urlparse(u)
+        if p.scheme not in ("http", "https") or not p.hostname:
+            raise HTTPException(status_code=400, detail="Only http/https URLs are allowed")
+        try:
+            resolved = socket.getaddrinfo(p.hostname, None)
+        except socket.gaierror:
+            raise HTTPException(status_code=400, detail="Could not resolve URL host")
+        for info in resolved:
+            ip = ipaddress.ip_address(info[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                raise HTTPException(status_code=400, detail="URL resolves to a disallowed address")
 
     try:
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            resp = await client.get(req.url)
-            resp.raise_for_status()
-            text = resp.text
+        # Follow redirects MANUALLY, re-validating every hop — otherwise a public
+        # URL could 302 to the cloud metadata server / an internal IP (SSRF).
+        # NOTE: residual TOCTOU risk — _check_host() resolves DNS, then httpx
+        # resolves AGAIN for the actual GET, so a DNS-rebinding attacker with a
+        # near-zero TTL could swap the record between the two lookups. The full
+        # fix (connect by the pinned, validated IP) is deliberately deferred.
+        text = None
+        async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+            current = req.url
+            for _ in range(6):
+                _check_host(current)
+                resp = await client.get(current)
+                if resp.is_redirect and resp.headers.get("location"):
+                    current = str(httpx.URL(current).join(resp.headers["location"]))
+                    continue
+                resp.raise_for_status()
+                text = resp.text
+                break
+        if text is None:
+            raise HTTPException(status_code=400, detail="Too many redirects")
 
         # Try to extract title from Gutenberg header
         title = ""
@@ -78,6 +92,8 @@ async def fetch_book_from_url(req: FetchUrlRequest) -> dict[str, Any]:
                 break
 
         return {"text": text.strip(), "title": title or "Untitled"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to fetch URL: {str(e)}")
 
@@ -110,7 +126,21 @@ async def _run_preprocess(book_id: str, dest: Path, gemini_api_key: str | None =
     import asyncio, os, sys
     env = os.environ.copy()
     if gemini_api_key:
+        # Route preprocessing to the USER's key (their billing). Setting the key
+        # alone is not enough — make_genai_client() picks Vertex first unless the
+        # backend is also switched, so the key was previously ignored.
         env["GEMINI_API_KEY"] = gemini_api_key
+        env["GEMINI_BACKEND"] = "api_key"
+    # Clear any stale error.json from a previous attempt, else the frontend shows
+    # this fresh run as already-failed.
+    preprocess_dir = GENERATED_DIR / book_id / "preprocess"
+    preprocess_dir.mkdir(parents=True, exist_ok=True)
+    err_file = preprocess_dir / "error.json"
+    if err_file.exists():
+        try:
+            err_file.unlink()
+        except OSError:
+            pass
     try:
         proc = await asyncio.create_subprocess_exec(
             sys.executable, "scripts/preprocess_book.py", "--input", str(dest), "--book-id", book_id, "--skip-sheets",
@@ -125,6 +155,8 @@ async def _run_preprocess(book_id: str, dest: Path, gemini_api_key: str | None =
             proc.kill()
             await proc.communicate()
             logger.error("Preprocess timed out for %s", book_id)
+            # Write an error so the frontend stops showing "processing" forever.
+            err_file.write_text(json.dumps({"error": "Preprocess timed out after 600s.", "returncode": -1}))
             return
 
         if proc.returncode != 0:
@@ -147,6 +179,14 @@ async def _run_preprocess(book_id: str, dest: Path, gemini_api_key: str | None =
 @router.get("/api/health")
 async def health_check() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/api/config")
+async def get_app_config() -> dict[str, Any]:
+    """Client-readable runtime config — whether BYOK is enforced (so the editor
+    knows whether to gate generation behind a user-supplied key)."""
+    from src.config import REQUIRE_USER_KEY
+    return {"require_user_key": REQUIRE_USER_KEY}
 
 
 @router.post("/api/generate")
@@ -188,6 +228,9 @@ async def start_generation_upload(
     config: str = Form(default="{}"),
 ) -> dict[str, Any]:
     """Start preprocess from file upload. Returns book_id for editor redirect."""
+    # PDF/EPUB support was removed — the extraction module only parses text.
+    if not (file.filename or "").lower().endswith(".txt"):
+        raise HTTPException(status_code=400, detail="Only .txt files are supported.")
     upload_dir = GENERATED_DIR / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
     dest = upload_dir / Path(file.filename or "upload.txt").name
@@ -209,64 +252,6 @@ async def start_generation_upload(
     background_tasks.add_task(_run_preprocess, book_id, dest, gemini_api_key=user_api_key)
 
     return {"book_id": book_id, "status": "preprocessing"}
-
-
-@router.get("/api/status/{book_id}")
-async def get_generation_status(book_id: str) -> dict[str, Any]:
-    status = await get_status(book_id)
-    if status is None:
-        raise HTTPException(status_code=404, detail="Book not found.")
-    return status
-
-
-@router.get("/api/book/{book_id}")
-async def get_book_data(book_id: str) -> dict[str, Any]:
-    book = await get_book(book_id)
-    if book is None:
-        raise HTTPException(status_code=404, detail="Book not found.")
-    return book
-
-
-@router.get("/api/book/{book_id}/steps")
-async def get_book_steps(book_id: str) -> list[dict[str, Any]]:
-    """Get all intermediate pipeline steps for a book."""
-    from src.core.step_logger import get_steps
-    steps = get_steps(book_id)
-    if not steps:
-        raise HTTPException(status_code=404, detail="No steps found. Book may not exist or is still generating.")
-    return steps
-
-
-@router.get("/api/book/{book_id}/html", response_class=HTMLResponse)
-async def get_book_html(book_id: str) -> HTMLResponse:
-    html_path = GENERATED_DIR / book_id / "book.html"
-    if not html_path.exists():
-        raise HTTPException(status_code=404, detail="HTML not found. Book may still be generating.")
-    return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
-
-
-@router.get("/api/book/{book_id}/pdf")
-async def get_book_pdf(book_id: str) -> FileResponse:
-    from src.renderer import export_pdf
-
-    book = await get_book(book_id)
-    if book is None:
-        raise HTTPException(status_code=404, detail="Book not found.")
-
-    pdf_path = GENERATED_DIR / book_id / "book.pdf"
-    if not pdf_path.exists():
-        pages = book.get("pages", [])
-        title = book.get("title", "Untitled")
-        export_pdf(pages, title, str(pdf_path))
-
-    if not pdf_path.exists():
-        raise HTTPException(status_code=500, detail="PDF generation failed.")
-
-    return FileResponse(
-        path=str(pdf_path),
-        media_type="application/pdf",
-        filename=f"{book.get('title', 'picture_book')}.pdf",
-    )
 
 
 @router.get("/api/books")
