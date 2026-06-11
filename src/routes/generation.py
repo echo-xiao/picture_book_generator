@@ -895,13 +895,17 @@ async def regenerate_scene_sheet(
     return {"status": "generating", "scene": scene_name}
 
 
-def _run_character_sheet_quality(book_id: str, char_name: str) -> dict | None:
-    """Run + cache the quality check on a character's reference sheet.
+def _run_character_sheet_quality(
+    book_id: str, char_name: str, regenerate_fn=None,
+) -> dict | None:
+    """QA (and optionally self-correct) a character's reference sheet.
 
-    Returns the result, or None if no sheet exists yet. Shared by the quality
-    endpoint and the auto-QC that runs after every sheet (re)generation.
+    Delegates to the SHARED sheet policy in page_service (lenient threshold).
+    With regenerate_fn=None this is report-only — used by the manual quality
+    endpoint; the regen flow passes a feedback-retry function.
+    Returns the result, or None if no sheet exists yet.
     """
-    from src.generation.gemini_consistency_check import check_character_sheet_quality
+    from src.generation.page_service import sheet_qa_and_self_correct
     from src.routes.helpers import load_characters
 
     chars_dir = GENERATED_DIR / book_id / "characters"
@@ -924,12 +928,17 @@ def _run_character_sheet_quality(book_id: str, char_name: str) -> dict | None:
             role = c.get("role", "supporting")
             break
 
-    result = check_character_sheet_quality(sheet_path, char_name, appearance, visual_details, gender, role)
-    quality_dir = chars_dir / "quality"
-    quality_dir.mkdir(parents=True, exist_ok=True)
-    (quality_dir / f"{safe}_quality.json").write_text(
-        json.dumps(result, indent=2, default=str, ensure_ascii=False), encoding="utf-8")
-    return result
+    return sheet_qa_and_self_correct(
+        sheet_path=sheet_path,
+        char_name=char_name,
+        appearance=appearance,
+        visual_details=visual_details,
+        gender=gender,
+        role=role,
+        history_dir=chars_dir / "history",
+        quality_path=chars_dir / "quality" / f"{safe}_quality.json",
+        regenerate_fn=regenerate_fn,
+    )
 
 
 @router.post("/api/book/{book_id}/characters/{char_name}/regenerate")
@@ -971,9 +980,19 @@ async def regenerate_character_sheet(
 
         if profile:
             await run_in_threadpool(generate_character_sheets, [profile], book_id)
-            # Auto-run the quality check on every freshly generated sheet.
+
+            # Auto QA + bounded self-correction (shared sheet policy, lenient
+            # threshold — only a truly broken sheet retries with the feedback).
+            def _sheet_regen_fn(feedback: str) -> str:
+                sheets = generate_character_sheets(
+                    [profile], book_id, correction_feedback=feedback,
+                )
+                return (sheets[0].get("sheet_path", "") if sheets else "") or ""
+
             try:
-                _run_character_sheet_quality(book_id, char_name)
+                await run_in_threadpool(
+                    _run_character_sheet_quality, book_id, char_name, _sheet_regen_fn,
+                )
             except Exception as e:
                 logger.warning("Auto quality-check failed for %s: %s", char_name, e)
 
@@ -999,7 +1018,7 @@ async def check_character_sheet_quality_endpoint(
     book_id: str, char_name: str
 ) -> dict[str, Any]:
     """Run quality check on a character's reference sheet."""
-    result = _run_character_sheet_quality(book_id, char_name)
+    result = await run_in_threadpool(_run_character_sheet_quality, book_id, char_name)
     if result is None:
         raise HTTPException(status_code=404, detail=f"No sheet found for '{char_name}'.")
     return result

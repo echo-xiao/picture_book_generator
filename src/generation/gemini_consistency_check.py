@@ -279,7 +279,10 @@ Return JSON:
 
 
 def _empty_sheet_quality(character_name: str = "") -> dict:
+    # qa_failed marks this as a sentinel (the QA call itself failed), NOT a
+    # real perfect score — self-correct must never treat it as a 100.
     return {
+        "qa_failed": True,
         "overall_score": 100,
         "character_name": character_name,
         "is_group": False,

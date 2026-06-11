@@ -682,7 +682,8 @@ export default function EditorPage() {
         }
       } catch {}
     }, 5000);
-    setTimeout(() => clearInterval(poll), 120000);
+    // 240s: sheet regen may now self-correct (2x generate + 2x QA worst case)
+    setTimeout(() => clearInterval(poll), 240000);
   };
 
   // Regenerate a special page (book/chapter cover, back cover) + poll until ready

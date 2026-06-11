@@ -249,6 +249,7 @@ def generate_character_sheets(
     book_id: str,
     style: str | None = None,
     max_characters: int = 0,
+    correction_feedback: str = "",
 ) -> list[dict]:
     """Generate character portraits + reference sheets.
 
@@ -292,14 +293,21 @@ def generate_character_sheets(
         save_path = output_dir / f"{safe_name}_sheet"
         sheet_path = ""
 
-        # Check if sheet already exists
-        for ext in (".png", ".jpg"):
-            if save_path.with_suffix(ext).exists():
-                sheet_path = str(save_path.with_suffix(ext))
-                break
+        # Check if sheet already exists — unless this is a quality-feedback
+        # retry, which must regenerate over the existing (failing) sheet.
+        if not correction_feedback:
+            for ext in (".png", ".jpg"):
+                if save_path.with_suffix(ext).exists():
+                    sheet_path = str(save_path.with_suffix(ext))
+                    break
 
         if not sheet_path:
             prompt = _build_sheet_prompt(profile, active_style, all_profiles=main_chars)
+            if correction_feedback:
+                prompt += (
+                    "\n\nIMPORTANT — a previous version of this sheet failed quality review. "
+                    f"Fix these specific issues while keeping the character's identity:\n{correction_feedback}"
+                )
             from src.config import IMAGE_LLM
 
             if IMAGE_LLM == "alicloud":

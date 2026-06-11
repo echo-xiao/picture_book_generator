@@ -156,7 +156,8 @@ export default function CharacterManagement({
             }
           } catch {}
         }, 5000);
-        setTimeout(() => { clearInterval(poll); resolve(); }, 120000);
+        // 240s: sheet regen may now self-correct (2x generate + 2x QA worst case)
+        setTimeout(() => { clearInterval(poll); resolve(); }, 240000);
       });
       setSheetCacheBust(Date.now());  // force big preview + Current thumbnail to reload
     } finally {
@@ -204,7 +205,7 @@ export default function CharacterManagement({
               }
             } catch {}
           }, 10000);
-          setTimeout(() => { clearInterval(poll); resolve(); }, 120000);
+          setTimeout(() => { clearInterval(poll); resolve(); }, 240000);
         });
       } catch {}
     }
