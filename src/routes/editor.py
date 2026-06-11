@@ -455,7 +455,7 @@ async def update_scene(book_id: str, scene_name: str, update: SceneUpdate) -> di
     llm_locs = _load_json(book_id, "llm_locations.json")
     target = None
     if llm_locs:
-        target = next((l for l in llm_locs.get("locations", []) if l.get("name") == scene_name), None)
+        target = next((loc for loc in llm_locs.get("locations", []) if loc.get("name") == scene_name), None)
 
     if target is None:
         raise HTTPException(status_code=404, detail=f"Scene '{scene_name}' not found.")
@@ -464,7 +464,7 @@ async def update_scene(book_id: str, scene_name: str, update: SceneUpdate) -> di
 
     # Reject a rename that collides with another existing location.
     if new_name != scene_name:
-        others = {l.get("name") for l in (llm_locs or {}).get("locations", []) if l is not target}
+        others = {loc.get("name") for loc in (llm_locs or {}).get("locations", []) if loc is not target}
         if new_name in others:
             raise HTTPException(status_code=409, detail=f"A location named '{new_name}' already exists.")
 
@@ -561,7 +561,6 @@ async def get_scene_sheet_history(book_id: str, scene_name: str) -> dict[str, An
 @router.get("/api/book/{book_id}/preprocess/characters/{char_name}/history")
 async def get_character_sheet_history(book_id: str, char_name: str) -> dict[str, Any]:
     """Get current + historical character sheet images."""
-    import re as _re
 
     chars_dir = GENERATED_DIR / book_id / "characters"
     safe = _safe_filename(char_name)

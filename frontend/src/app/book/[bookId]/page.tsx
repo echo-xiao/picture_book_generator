@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 
 import { ChevronLeft, ChevronRight, Edit3 } from "lucide-react";
+import { getChapters, getChapterSegments } from "@/lib/api";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
@@ -32,22 +33,32 @@ export default function BookViewerPage() {
     async function load() {
       try {
         // Load chapters
-        const chapRes = await fetch(`/api/book/${bookId}/preprocess/chapters`);
-        const chapData = await chapRes.json();
+        const chapData = await getChapters(bookId);
         setTitle(chapData.meta?.title || bookId);
         const chapterMap = chapData.chapters || {};
 
-        // Load all segments for all chapters that have illustrations
+        // Fetch every chapter's segments in parallel (sequential fetches made
+        // opening a 9-chapter book take 9 round-trips), then assemble in
+        // chapter order.
+        const chapterIndices = Object.keys(chapterMap).map(Number).sort((a, b) => a - b);
+        const results = await Promise.all(
+          chapterIndices.map(async (chIdx) => {
+            try {
+              const segData = await getChapterSegments(bookId, chIdx);
+              return { chIdx, segments: segData.segments || [] };
+            } catch {
+              return { chIdx, segments: [] };
+            }
+          })
+        );
+
         const allPages: PageInfo[] = [];
-        for (const [chIdx, info] of Object.entries(chapterMap) as [string, any][]) {
-          const segRes = await fetch(`/api/book/${bookId}/preprocess/chapter/${chIdx}/segments`);
-          const segData = await segRes.json();
-          const segments = segData.segments || [];
+        for (const { chIdx, segments } of results) {
           segments.forEach((seg: any) => {
             if (seg.illustration_url) {
               allPages.push({
                 page_number: allPages.length + 1,
-                chapter_idx: Number(chIdx),
+                chapter_idx: chIdx,
                 segment_id: seg.id,
                 text: seg.simplified_text || seg.scene_summary || "",
                 image_url: seg.illustration_url,
@@ -69,6 +80,7 @@ export default function BookViewerPage() {
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === "ArrowRight" || e.key === " ") {
+        e.preventDefault(); // Space would otherwise also scroll the page
         setCurrentPage((p) => Math.min(p + 1, pages.length - 1));
       } else if (e.key === "ArrowLeft") {
         setCurrentPage((p) => Math.max(p - 1, 0));

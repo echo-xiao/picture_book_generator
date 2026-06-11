@@ -550,7 +550,7 @@ Return JSON:
     _save(preprocess_dir, "llm_characters", {"characters": characters})
 
     # Locations
-    print(f"  Identifying key locations...")
+    print("  Identifying key locations...")
     t1 = time.time()
     locations = _llm_identify_locations(title, chapters)
     print(f"  {len(locations)} locations in {time.time() - t1:.1f}s:")
@@ -575,10 +575,10 @@ def _layer3_build_aliases(book_id, preprocess_dir, characters):
 def _generate_character_sheets(book_id, preprocess_dir, characters, skip_sheets):
     """Character sheet generation (Gemini Image) — optional step between layers."""
     if skip_sheets:
-        print(f"\n[Character Sheets] SKIPPED (--skip-sheets)")
+        print("\n[Character Sheets] SKIPPED (--skip-sheets)")
         return
 
-    print(f"\n[Character Sheets] Generating character sheets (Gemini Image)...")
+    print("\n[Character Sheets] Generating character sheets (Gemini Image)...")
     t0 = time.time()
     from src.generation.character_sheet import generate_character_sheets
 
@@ -632,7 +632,7 @@ def _generate_character_sheets(book_id, preprocess_dir, characters, skip_sheets)
 
 def _layer4_replace_aliases(book_id, preprocess_dir, chapters, full_text, alias_map):
     """Layer 4: Alias replacement in text."""
-    print(f"\n[Layer 4/6] Replacing aliases in text...")
+    print("\n[Layer 4/6] Replacing aliases in text...")
     t0 = time.time()
     print(f"  {len(alias_map)} alias mappings")
 
@@ -653,7 +653,7 @@ def _layer4_replace_aliases(book_id, preprocess_dir, chapters, full_text, alias_
 
 def _layer5_segment_text(book_id, preprocess_dir, cleaned_chapters, cleaned_full_text, chapters):
     """Layer 5: TextTiling segmentation."""
-    print(f"\n[Layer 5/6] TextTiling segmentation...")
+    print("\n[Layer 5/6] TextTiling segmentation...")
     t0 = time.time()
     all_segments = _segment_text(cleaned_full_text, cleaned_chapters)
     dt = time.time() - t0
@@ -677,7 +677,7 @@ def _layer5_segment_text(book_id, preprocess_dir, cleaned_chapters, cleaned_full
 
 def _layer6_annotate(book_id, preprocess_dir, chapters, characters, title, ch_seg_groups, skip_sheets):
     """Layer 6: LLM annotation per segment."""
-    print(f"\n[Layer 6/6] LLM annotation (characters, sentiment, events)...")
+    print("\n[Layer 6/6] LLM annotation (characters, sentiment, events)...")
     all_events = []
     chapter_segments_map = {}
     segment_id = 0
@@ -749,7 +749,7 @@ def _layer6_annotate(book_id, preprocess_dir, chapters, characters, title, ch_se
         print(f"  Skipped {skipped} chapters (already annotated)")
 
     # Generate chapter-level summaries from segment scene_summaries
-    print(f"\n  Generating chapter summaries...")
+    print("\n  Generating chapter summaries...")
     from src.llm_client import generate_json as _gen_json
     for ch_idx in sorted_ch_keys:
         segs = ch_seg_groups[ch_idx]
@@ -868,13 +868,13 @@ def main():
         save_preprocess(book_id, title, characters, final_segments, alias_map, gender_map)
         print(f"\n  MongoDB: saved ({len(characters)} characters, {len(final_segments)} segments)")
     else:
-        print(f"\n  MongoDB: not available (data saved to files only)")
+        print("\n  MongoDB: not available (data saved to files only)")
 
     # Summary
     print(f"\n{'='*50}")
     print(f"Preprocess complete: {title}")
     print(f"  Output: {preprocess_dir}")
-    print(f"  Files:")
+    print("  Files:")
     for f in sorted(preprocess_dir.glob("*.json")):
         size = f.stat().st_size
         print(f"    {f.name} ({size:,} bytes)")

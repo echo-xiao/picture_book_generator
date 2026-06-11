@@ -335,7 +335,7 @@ class ArtistAgent:
         from src.generation.character_sheet import _assign_visual_identities
 
         profiles = _assign_visual_identities(profiles)
-        print(f"[Artist Agent] Generating book cover...")
+        print("[Artist Agent] Generating book cover...")
         t0 = time.time()
         path = generate_book_cover(title, profiles, self.book_id)
         print(f"  Done in {time.time() - t0:.1f}s")
@@ -373,7 +373,7 @@ class ArtistAgent:
         """Generate back cover."""
         from src.generation.special_pages import generate_back_cover
 
-        print(f"[Artist Agent] Generating back cover...")
+        print("[Artist Agent] Generating back cover...")
         t0 = time.time()
         path = generate_back_cover(title, self.book_id)
         print(f"  Done in {time.time() - t0:.1f}s")

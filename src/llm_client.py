@@ -161,4 +161,4 @@ def generate_json(prompt: str, system: str = "", max_retries: int = 3) -> dict[s
             pass
 
     logger.error("Failed to parse JSON. Raw response: %s", raw[:1000])
-    raise ValueError(f"LLM returned invalid JSON")
+    raise ValueError("LLM returned invalid JSON")

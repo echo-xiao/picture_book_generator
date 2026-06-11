@@ -9,7 +9,6 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from src.config import GENERATED_DIR, MONGODB_URI, MONGODB_DB

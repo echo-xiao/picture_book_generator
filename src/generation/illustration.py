@@ -112,7 +112,6 @@ def _build_page_prompt(page: dict, character_sheets: list[dict]) -> tuple[str, l
     scene = page.get("scene_description", page.get("prompt", ""))
     text = page.get("text", "")
     scene_direction = page.get("scene_direction", "")
-    page_num = page.get("page_number", "?")
     key_characters = page.get("key_characters", [])
 
     # Use LLM-annotated characters directly (only physically present + their actions)

@@ -172,6 +172,20 @@ export default function EditorPage() {
     if (sceneRegenTimer.current) clearTimeout(sceneRegenTimer.current);
   }, []);
 
+  // Warn before leaving the page (View Book is a full navigation) while
+  // segment edits are unsaved — the in-app chapter switch already confirms,
+  // but a navigation away silently dropped them.
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (dirtySegIds.current.size > 0) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, []);
+
   // Refresh the set of stale pages (deps regenerated after the page image) for a chapter
   const refreshStale = async (chIdx: number | null) => {
     if (chIdx === null) return;

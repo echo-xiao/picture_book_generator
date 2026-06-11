@@ -33,7 +33,6 @@ def _build_sheet_prompt(profile: dict, style: str, all_profiles: list[dict] | No
     """Build a character sheet prompt that prioritizes concrete physical details."""
     name = profile.get("name", "Character")
     gender = profile.get("gender", "unknown")
-    role = profile.get("role", "")
 
     # Extract concrete visual details (highest priority)
     vd = profile.get("visual_details", {})
@@ -65,7 +64,7 @@ def _build_sheet_prompt(profile: dict, style: str, all_profiles: list[dict] | No
             parts.append(f"{hair_desc}")
         if eyes_desc:
             parts.append(f"{eyes_desc}")
-        emphasis = f"\n\nREPEAT — THE MOST IMPORTANT FEATURES TO GET RIGHT:\n  " + ", ".join(parts)
+        emphasis = "\n\nREPEAT — THE MOST IMPORTANT FEATURES TO GET RIGHT:\n  " + ", ".join(parts)
 
     gender_note = "Draw as a MAN/BOY." if gender == "male" else "Draw as a WOMAN/GIRL." if gender == "female" else ""
 

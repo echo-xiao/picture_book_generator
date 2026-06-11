@@ -18,7 +18,7 @@ from starlette.responses import JSONResponse
 from src.config import GENERATED_DIR
 
 GCS_BUCKET = os.getenv("GCS_BUCKET", "picture-book-gen-assets")
-from src.routes import books, editor, generation
+from src.routes import books, editor, generation  # noqa: E402 — needs GCS_BUCKET set first
 
 # ---------------------------------------------------------------------------
 # App setup

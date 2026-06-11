@@ -25,7 +25,7 @@ from pathlib import Path
 _project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_project_root))
 
-from src.config import GENERATED_DIR
+from src.config import GENERATED_DIR  # noqa: E402 — after sys.path setup
 
 logging.basicConfig(
     level=logging.INFO,
@@ -94,7 +94,7 @@ def build_combined_pdf(book_id: str, data: dict, chapter_indices: list[int] | No
     pdf_path = str(GENERATED_DIR / book_id / "book.pdf")
     export_pdf(combined_pages, title, pdf_path, special_dir=special_dir, chapter_nums=chapter_nums)
 
-    print(f"\n=== Combined PDF ===")
+    print("\n=== Combined PDF ===")
     print(f"  Chapters: {[c.get('chapter_title', '?') for c in all_chapters]}")
     print(f"  Total pages: {len(combined_pages)}")
     print(f"  PDF: {pdf_path}")

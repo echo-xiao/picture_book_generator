@@ -18,7 +18,6 @@ from google import genai
 
 from src.config import (
     DEFAULT_STYLE,
-    GEMINI_API_KEY,
     GEMINI_IMAGE_MODEL,
     GENERATED_DIR,
     NEGATIVE_PROMPT,

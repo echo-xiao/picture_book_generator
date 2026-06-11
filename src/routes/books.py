@@ -122,7 +122,9 @@ def _save_user_info(book_id: str, email: str, api_key: str | None = None) -> Non
 
 async def _run_preprocess(book_id: str, dest: Path, gemini_api_key: str | None = None) -> None:
     """Run preprocess_book.py with error tracking (non-blocking)."""
-    import asyncio, os, sys
+    import asyncio
+    import os
+    import sys
     env = os.environ.copy()
     if gemini_api_key:
         # Route preprocessing to the USER's key (their billing). Setting the key

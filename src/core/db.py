@@ -11,14 +11,12 @@ All operations are synchronous (pymongo) for compatibility with scripts.
 Falls back gracefully if MongoDB is unavailable.
 """
 
-import json
 import logging
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 import pymongo
-from pymongo.errors import ServerSelectionTimeoutError
 
 from src.config import MONGODB_URI, MONGODB_DB
 

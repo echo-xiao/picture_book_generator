@@ -17,7 +17,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 

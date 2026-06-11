@@ -16,8 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from pathlib import Path
-from typing import Any, AsyncGenerator
+from typing import AsyncGenerator
 
 from google.adk.agents import BaseAgent, SequentialAgent
 from google.adk.events import Event
@@ -31,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 # Single shared progress writer (merge-write) — see src/agents/progress.py
-from src.agents.progress import update_progress as _update_progress
+from src.agents.progress import update_progress as _update_progress  # noqa: E402
 
 
 class PipelineContext:

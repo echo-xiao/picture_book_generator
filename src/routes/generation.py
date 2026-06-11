@@ -85,7 +85,7 @@ async def get_stale_pages(book_id: str, ch_idx: int) -> dict[str, Any]:
 
     char_cache: dict[str, float | None] = {}
     scene_cache: dict[str, float | None] = {}
-    locations = [l for l in (_load_json(book_id, "llm_locations.json") or {}).get("locations", []) if l.get("name")]
+    locations = [loc for loc in (_load_json(book_id, "llm_locations.json") or {}).get("locations", []) if loc.get("name")]
 
     stale = []
     for idx, seg in enumerate(ch_segs):
@@ -826,7 +826,7 @@ async def regenerate_scene_sheet(
         # Load location details
         llm_locs = _load_json(book_id, "llm_locations.json") or {}
         locations = llm_locs.get("locations", [])
-        loc = next((l for l in locations if l.get("name") == scene_name), None)
+        loc = next((loc for loc in locations if loc.get("name") == scene_name), None)
         if not loc:
             logger.error("Location %s not found", scene_name)
             return

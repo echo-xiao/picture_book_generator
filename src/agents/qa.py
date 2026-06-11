@@ -201,7 +201,7 @@ class QAAgent:
                 "per_page": self.per_page_results,
             }
 
-            print(f"\n  === [QA Agent] Chapter Quality Summary ===")
+            print("\n  === [QA Agent] Chapter Quality Summary ===")
             print(f"  Overall: {result['overall_score']}%")
             for dim, sc in dim_scores.items():
                 st = "OK" if sc >= 80 else "WARN" if sc >= 60 else "BAD"

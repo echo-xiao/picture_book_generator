@@ -6,7 +6,7 @@ Also provides MongoDB helpers for the FastAPI app to use.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Optional
 
 import motor.motor_asyncio
 
