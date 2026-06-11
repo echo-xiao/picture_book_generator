@@ -12,7 +12,6 @@ here, move the xfail test accordingly.
 
 from __future__ import annotations
 
-import pytest
 
 from src.agents.analyzer import AnalyzerAgent
 from tests.conftest import make_segment

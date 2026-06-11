@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import re
+import socket
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
@@ -26,48 +30,63 @@ class FetchUrlRequest(BaseModel):
     url: str
 
 
+def _resolve_safe_ip(host: str) -> str:
+    """Resolve `host` and require EVERY returned address to be public.
+
+    Returns one validated IP. The caller connects to exactly this IP, so the
+    address can't be swapped for an internal one between validation and the
+    actual request (the DNS-rebinding TOCTOU the old code documented but left
+    open: it validated the name, then let httpx resolve it a second time)."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        raise HTTPException(status_code=400, detail="Could not resolve URL host")
+    ips: list[str] = []
+    for info in infos:
+        addr = info[4][0]
+        ip = ipaddress.ip_address(addr)
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            raise HTTPException(status_code=400, detail="URL resolves to a disallowed address")
+        ips.append(addr)
+    if not ips:
+        raise HTTPException(status_code=400, detail="Could not resolve URL host")
+    return ips[0]
+
+
+async def _fetch_url_text(url: str, max_redirects: int = 6) -> str:
+    """GET text from a public URL, following redirects manually and pinning
+    each hop to a validated IP (Host header + TLS SNI keep the real hostname)."""
+    async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+        current = url
+        for _ in range(max_redirects):
+            p = urlparse(current)
+            if p.scheme not in ("http", "https") or not p.hostname:
+                raise HTTPException(status_code=400, detail="Only http/https URLs are allowed")
+            ip = _resolve_safe_ip(p.hostname)
+            # Connect to the validated IP; keep the hostname for Host + cert check.
+            pinned = httpx.URL(current).copy_with(host=ip)
+            host_header = p.hostname if p.port is None else f"{p.hostname}:{p.port}"
+            extensions = {"sni_hostname": p.hostname} if p.scheme == "https" else {}
+            req = client.build_request("GET", pinned, headers={"Host": host_header}, extensions=extensions)
+            resp = await client.send(req)
+            if resp.is_redirect and resp.headers.get("location"):
+                current = str(httpx.URL(current).join(resp.headers["location"]))
+                continue
+            resp.raise_for_status()
+            return resp.text
+    raise HTTPException(status_code=400, detail="Too many redirects")
+
+
 @router.post("/api/fetch-url")
 async def fetch_book_from_url(req: FetchUrlRequest) -> dict[str, Any]:
-    """Fetch plain text from a URL (e.g. Project Gutenberg)."""
-    import httpx
-    import ipaddress
-    import socket
-    from urllib.parse import urlparse
+    """Fetch plain text from a URL (e.g. Project Gutenberg).
 
-    def _check_host(u: str) -> None:
-        p = urlparse(u)
-        if p.scheme not in ("http", "https") or not p.hostname:
-            raise HTTPException(status_code=400, detail="Only http/https URLs are allowed")
-        try:
-            resolved = socket.getaddrinfo(p.hostname, None)
-        except socket.gaierror:
-            raise HTTPException(status_code=400, detail="Could not resolve URL host")
-        for info in resolved:
-            ip = ipaddress.ip_address(info[4][0])
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-                raise HTTPException(status_code=400, detail="URL resolves to a disallowed address")
-
+    SSRF-hardened: redirects are followed manually and every hop is pinned to
+    a validated public IP (see _fetch_url_text), closing the DNS-rebinding hole.
+    """
     try:
-        # Follow redirects MANUALLY, re-validating every hop — otherwise a public
-        # URL could 302 to the cloud metadata server / an internal IP (SSRF).
-        # NOTE: residual TOCTOU risk — _check_host() resolves DNS, then httpx
-        # resolves AGAIN for the actual GET, so a DNS-rebinding attacker with a
-        # near-zero TTL could swap the record between the two lookups. The full
-        # fix (connect by the pinned, validated IP) is deliberately deferred.
-        text = None
-        async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
-            current = req.url
-            for _ in range(6):
-                _check_host(current)
-                resp = await client.get(current)
-                if resp.is_redirect and resp.headers.get("location"):
-                    current = str(httpx.URL(current).join(resp.headers["location"]))
-                    continue
-                resp.raise_for_status()
-                text = resp.text
-                break
-        if text is None:
-            raise HTTPException(status_code=400, detail="Too many redirects")
+        text = await _fetch_url_text(req.url)
 
         # Try to extract title from Gutenberg header
         title = ""

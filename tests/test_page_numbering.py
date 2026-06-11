@@ -10,7 +10,6 @@ again.
 
 from __future__ import annotations
 
-import pytest
 
 from src.routes.helpers import segment_page_num
 from tests.conftest import make_segment
