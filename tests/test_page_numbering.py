@@ -1,14 +1,11 @@
 """Page-number invariants.
 
-There are (at least) three page-number derivations in the codebase:
-  1. helpers.segment_page_num — 1-based position within the chapter's segments
-     sorted by id (the canonical one; regen/quality endpoints use it).
-  2. analyzer.build_scenes — enumerate index + 1 over the segment list.
-  3. routes/editor.py get_chapter_segments — ``seg.id - min(ids) + 1``.
-
-They only agree while chapter segment ids are contiguous and id-ordered.
-These tests pin the canonical semantics and document where #3 diverges
-(review finding P1-7).
+helpers.segment_page_num (1-based position within the chapter's segments
+sorted by id) is the canonical page-number derivation; build_scenes and the
+editor segments route must agree with it — including when segment ids have
+gaps or short segments are skipped. Historically there were three divergent
+formulas (review finding P1-7); these tests keep them from drifting apart
+again.
 """
 
 from __future__ import annotations
@@ -73,19 +70,10 @@ def test_build_scenes_page_numbers_match_segment_page_num():
         assert segment_page_num(segs, 0, seg_id) == page
 
 
-# ---------------------------------------------------------------------------
-# BUG documentation (xfail strict — flip to plain test when fixed)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG P1-7 (CODE_REVIEW_2026-06-11.md): editor.py:556 computes the "
-    "illustration page as `id - min(ids) + 1`, which diverges from "
-    "segment_page_num as soon as chapter ids have a gap.",
-)
 def test_editor_segments_route_uses_canonical_page_numbers(client, monkeypatch, tmp_path):
     """With ids [0, 2, 3] (id 1 deleted), segment 2 is page 2 and its
-    illustration is page_002.png. The current formula looks for page_003."""
+    illustration is page_002.png — the old `id - min(ids) + 1` formula
+    looked for page_003 instead."""
     analysis = {"segments": [make_segment(0), make_segment(2), make_segment(3)]}
 
     def fake_load(book_id, filename):

@@ -34,6 +34,26 @@ def _require_user_key(x_gemini_key: str | None = Header(default=None)) -> str | 
         )
     return x_gemini_key
 
+def write_json_atomic(path, data: Any) -> None:
+    """Write JSON via temp file + rename so a concurrent reader (e.g. a status
+    poll) never sees a torn, half-written file."""
+    import os
+    import tempfile
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(data, default=str, ensure_ascii=False))
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 _file_locks: dict[str, threading.Lock] = {}
 _locks_lock = threading.Lock()
 

@@ -11,7 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from src.config import GENERATED_DIR
 from src.generation.character_sheet import _safe_filename
-from src.routes.helpers import _load_json, _require_user_key, _save_json, segment_page_num
+from src.routes.helpers import _load_json, _require_user_key, _save_json, segment_page_num, write_json_atomic
 from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger(__name__)
@@ -292,10 +292,10 @@ async def regenerate_segment_illustration(
         except OSError:
             pass
 
-        # Write completion marker
+        # Write completion marker (atomically — the frontend polls this file)
         import time as _t
         marker = ch_base / f"regen_{seg_id}.json"
-        marker.write_text(json.dumps({"status": "complete", "segment_id": seg_id, "page_number": page_num, "timestamp": _t.time()}))
+        write_json_atomic(marker, {"status": "complete", "segment_id": seg_id, "page_number": page_num, "timestamp": _t.time()})
 
     # Clear old marker BEFORE starting task so status check returns "generating"
     marker = ch_base / f"regen_{seg_id}.json"
@@ -323,8 +323,8 @@ async def regenerate_segment_illustration(
                         break
             except Exception:
                 pass
-            (ch_base / f"regen_{seg_id}.json").write_text(json.dumps(
-                {"status": "error", "segment_id": seg_id, "error": str(e)[:300]}))
+            write_json_atomic(ch_base / f"regen_{seg_id}.json",
+                              {"status": "error", "segment_id": seg_id, "error": str(e)[:300]})
         finally:
             reset_user_api_key(token)
 
@@ -345,8 +345,12 @@ async def get_regen_status(book_id: str, seg_id: int) -> dict[str, Any]:
     ch_idx = target.get("chapter_idx", 0)
     marker = GENERATED_DIR / book_id / "chapters" / f"ch{ch_idx:02d}" / f"regen_{seg_id}.json"
     if marker.exists():
-        result = json.loads(marker.read_text())
-        return result
+        try:
+            return json.loads(marker.read_text())
+        except (json.JSONDecodeError, OSError):
+            # Torn read racing the (now atomic) write, or a marker left by an
+            # older version — report still-generating rather than a 500.
+            return {"status": "generating"}
     return {"status": "generating"}
 
 

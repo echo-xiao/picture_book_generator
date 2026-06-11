@@ -601,10 +601,12 @@ async def get_chapter_segments(book_id: str, ch_idx: int) -> dict[str, Any]:
     segments = analysis.get("segments", [])
     ch_segments = [s for s in segments if s.get("chapter_idx") == ch_idx]
 
-    # Add illustration paths if they exist
+    # Add illustration paths if they exist. Page numbers MUST come from the
+    # shared helper — the previous `id - min(ids) + 1` formula diverged from
+    # the regen/quality endpoints as soon as chapter ids had a gap.
     ch_dir = GENERATED_DIR / book_id / "chapters" / f"ch{ch_idx:02d}"
     for seg in ch_segments:
-        page_num = seg.get("id", 0) - min((s.get("id", 0) for s in ch_segments), default=0) + 1
+        page_num = segment_page_num(segments, ch_idx, seg.get("id", 0))
         for ext in (".png", ".jpg"):
             img_path = ch_dir / "pages" / f"page_{page_num:03d}{ext}"
             if img_path.exists():

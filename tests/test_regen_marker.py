@@ -47,12 +47,6 @@ def test_unknown_segment_is_unknown(client, regen_env):
     assert resp.json()["status"] == "unknown"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="BUG P1-10 (CODE_REVIEW_2026-06-11.md): marker is written "
-    "non-atomically and read with a bare json.loads — a poll that races the "
-    "write gets a 500 instead of 'generating'.",
-)
 def test_half_written_marker_does_not_500(client, regen_env):
     marker = regen_env / "regen_0.json"
     marker.write_text('{"status": "comp')  # torn write

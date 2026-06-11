@@ -1,5 +1,14 @@
 # Code Review — picture_book_generator (2026-06-11)
 
+> **修复状态（2026-06-11 同日）**：
+> - ✅ P0-0 Cloud Run 存储：GCS bucket 已挂载为卷（revision `picture-book-gen-00038-bhn`），部署版冒烟验证通过
+> - ✅ P0-1 BYOK `/upload` 漏洞、P0-2 minor 角色 sheet、P0-3 editor 并发丢更新、P0-4 checkpoint 丢 `simplified_text` 已修
+> - ✅ P1-7 页码统一（editor 改用 `segment_page_num`）、P1-10 marker 原子写+容错读、P1-14 simplify/chat quality 缓存失效已修
+> - ✅ 前端 FE：AgentActivityPanel 轮询泄漏、refreshStale stale closure、scene-background debounce 泄漏、regen 180s 静默超时已修
+> - 🧪 测试网：后端 pytest 65 个（`pytest`）、前端 vitest 6 个（`cd frontend && npm test`），全绿
+> - ⚠️ 代码修复尚未部署——需要 `./deploy.sh`（会先 push git）才能在 Cloud Run 生效
+> - 其余 P1/P2 项未动
+
 审查方式：端到端实测一张图片生成（`the_great_gatsby` segment 0，全链路成功）+ 后端/前端两路深度代码审查 + ruff/tsc 静态检查 + 真实数据核对。
 
 ## 端到端验证结果 ✅
