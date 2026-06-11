@@ -67,11 +67,17 @@ export function BookLibrary({ onSelectBook }: Props) {
 
       <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-6">
         {books.map((book) => (
-          <a
+          // A <button>/<a> can't legally nest inside an <a>, so the card is a
+          // div with a stretched primary link and the View Book link on top.
+          <div
             key={book.book_id}
-            href={`/editor/${book.book_id}`}
-            className="card group hover:shadow-xl transition-all cursor-pointer block"
+            className="card group hover:shadow-xl transition-all relative"
           >
+            <a
+              href={`/editor/${book.book_id}`}
+              className="absolute inset-0 rounded-2xl"
+              aria-label={`Open ${book.title} in editor`}
+            />
             {/* Cover */}
             <div className="aspect-[4/3] rounded-2xl overflow-hidden mb-4 bg-gradient-to-br from-peach/50 to-lavender/50 flex items-center justify-center">
               <span className="text-5xl group-hover:scale-110 transition-transform">📖</span>
@@ -103,15 +109,15 @@ export function BookLibrary({ onSelectBook }: Props) {
                 Editor
               </span>
               {book.generated_chapters > 0 && (
-                <button
-                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); window.location.href = `/book/${book.book_id}`; }}
-                  className="text-xs bg-coral text-white px-2 py-1 rounded-lg hover:bg-coral/80 transition-colors"
+                <a
+                  href={`/book/${book.book_id}`}
+                  className="relative z-10 text-xs bg-coral text-white px-2 py-1 rounded-lg hover:bg-coral/80 transition-colors"
                 >
                   View Book
-                </button>
+                </a>
               )}
             </div>
-          </a>
+          </div>
         ))}
       </div>
     </div>

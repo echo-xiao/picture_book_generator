@@ -118,7 +118,9 @@ export default function SceneManagement({ bookId, initialScene, onSelectScene, o
         setTimeout(() => { clearInterval(poll); setGenerating(null); resolve(); }, 120000);
       });
       onSceneRegen?.();  // notify parent → refresh stale pages + parent's scene copy
-    } catch {
+    } catch (e: any) {
+      console.error("Scene save & regen failed:", e);
+      alert(`Save & regenerate failed: ${e?.response?.data?.detail || e?.message || e}`);
       setGenerating(null);
     }
   };

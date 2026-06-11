@@ -10,6 +10,7 @@ import {
   getChapterSegments,
   updateSegment,
   regenerateSegment,
+  restoreSegmentVersion,
   regenerateCharacterSheet,
   generateChapter,
   getChapterProgress,
@@ -162,6 +163,10 @@ export default function EditorPage() {
   const unmountedRef = useRef(false);
   useEffect(() => () => {
     unmountedRef.current = true;
+    // Stop the Gen All LOOP too, not just its polls — otherwise after the
+    // user navigates away each poll resolves early and the loop fires
+    // generateChapter for every remaining chapter in quick succession.
+    genAllChaptersRef.current = false;
     // A pending scene-background debounce would otherwise still fire its
     // updateSegment + paid LLM call after the user has left the page.
     if (sceneRegenTimer.current) clearTimeout(sceneRegenTimer.current);
@@ -476,8 +481,9 @@ export default function EditorPage() {
         });
       }
       dirtySegIds.current = new Set();
-    } catch (e) {
+    } catch (e: any) {
       console.error("Save failed:", e);
+      alert(`Save failed: ${e?.response?.data?.detail || e?.message || e}`);
     } finally {
       setSaving(false);
     }
@@ -715,11 +721,28 @@ export default function EditorPage() {
     } catch { setRegenSpecial(false); }
   };
 
-  // Handle version selection from carousel
-  const handleSelectVersion = (url: string, quality: any) => {
-    if (selectedSegment) {
-      setSelectedSegment({ ...selectedSegment, illustration_url: url });
-      setQualityResult(quality);
+  // Restore a historical version from the carousel. This persists on the
+  // backend — the old purely-local swap reverted on reload and never reached
+  // the PDF/viewer.
+  const handleSelectVersion = async (img: { url: string; version: string; quality?: any }) => {
+    if (!selectedSegment || regenerating) return;
+    setQualityResult(img.quality || null);
+    if (img.version === "current") return;
+    const segId = selectedSegment.id;
+    const chIdx = selectedChapter;
+    setRegenerating(true); // also makes IllustrationPanel bust its image cache
+    try {
+      await restoreSegmentVersion(bookId, segId, img.version);
+      if (chIdx !== null && selectedChapterRef.current === chIdx) {
+        const data = await getChapterSegments(bookId, chIdx);
+        setSegments(data.segments || []);
+        const updated = data.segments?.find((s: Segment) => s.id === segId);
+        if (updated) setSelectedSegment(prev => (prev?.id === segId ? updated : prev));
+      }
+    } catch (e: any) {
+      alert(`Restore failed: ${e?.response?.data?.detail || e?.message || e}`);
+    } finally {
+      setRegenerating(false); // history effect reloads the carousel + quality
     }
   };
 
@@ -735,7 +758,7 @@ export default function EditorPage() {
     if (!loading || preprocessError) return;
     const interval = setInterval(async () => {
       try {
-        const prog = await fetch(`/api/book/${bookId}/preprocess/progress`).then(r => r.json());
+        const prog = await getPreprocessProgress(bookId);
         if (prog.status === "error") {
           setPreprocessError(prog.error || prog.step || "Preprocess failed");
           clearInterval(interval);

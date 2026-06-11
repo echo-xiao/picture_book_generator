@@ -60,6 +60,7 @@ export default function AgentActivityPanel({
 }: Props) {
   const [logs, setLogs] = useState<AgentLogEntry[]>([]);
   const logEndRef = useRef<HTMLDivElement>(null);
+  const logContainerRef = useRef<HTMLDivElement>(null);
 
   // Poll agent logs
   useEffect(() => {
@@ -85,9 +86,14 @@ export default function AgentActivityPanel({
     };
   }, [bookId, chapterIdx, isGenerating]);
 
-  // Auto-scroll the activity log to the newest entry as logs arrive
+  // Auto-scroll the activity log to the newest entry as logs arrive — but only
+  // if the user is already near the bottom, so the 3s poll doesn't keep yanking
+  // them back down while they're reading earlier entries.
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = logContainerRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+    if (nearBottom) logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
 
   const agentStatuses = getAgentStatuses(logs, currentAgent);
@@ -199,7 +205,7 @@ export default function AgentActivityPanel({
       )}
 
       {/* Activity Log Stream */}
-      <div className="flex-1 overflow-y-auto px-3 py-2">
+      <div ref={logContainerRef} className="flex-1 overflow-y-auto px-3 py-2">
         <p className="text-[9px] text-gray-400 font-bold uppercase tracking-wider mb-2">Activity Log</p>
         {logs.length === 0 ? (
           <p className="text-xs text-gray-400 text-center py-8">

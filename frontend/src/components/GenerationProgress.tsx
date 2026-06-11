@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { getChapters } from "@/lib/api";
+import { getChapters, getPreprocessProgress } from "@/lib/api";
 import { AGENT_META, PREPROCESS_STEPS as STEPS } from "@/lib/agents";
 
 interface Props {
@@ -27,7 +27,7 @@ export function GenerationProgress({ bookId, onBack }: Props) {
     async function poll() {
       // Check progress endpoint
       try {
-        const prog = await fetch(`/api/book/${bookId}/preprocess/progress`).then(r => r.json());
+        const prog = await getPreprocessProgress(bookId);
         if (cancelled) return;
         if (prog.status === "error") {
           // Fatal preprocess error — stop polling, don't redirect

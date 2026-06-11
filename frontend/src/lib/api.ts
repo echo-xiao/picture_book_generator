@@ -32,17 +32,6 @@ export async function startGeneration(
   return data;
 }
 
-export async function uploadAndGenerate(
-  file: File,
-  config: GenerationConfig
-): Promise<{ book_id: string }> {
-  const formData = new FormData();
-  formData.append("file", file);
-  formData.append("config", JSON.stringify(config));
-  const { data } = await api.post("/generate/upload", formData);
-  return data;
-}
-
 export async function getConfig() {
   const { data } = await api.get("/config");
   return data as { require_user_key: boolean };
@@ -81,10 +70,6 @@ export async function generateSummary(bookId: string, segId: number) {
 export async function getSegmentHistory(bookId: string, segId: number) {
   const { data } = await api.get(`/book/${bookId}/segment/${segId}/history`);
   return data;
-}
-
-export async function deleteBook(bookId: string): Promise<void> {
-  await api.delete(`/book/${bookId}`);
 }
 
 // ── Editor APIs ──
@@ -141,6 +126,13 @@ export async function getChapterSegments(bookId: string, chapterIdx: number) {
 export async function updateSegment(bookId: string, segId: number, updates: Record<string, unknown>) {
   const { data } = await api.put(`/book/${bookId}/segment/${segId}`, updates);
   return data;
+}
+
+export async function restoreSegmentVersion(bookId: string, segId: number, version: string) {
+  const { data } = await api.post(
+    `/book/${bookId}/segment/${segId}/restore-version?version=${encodeURIComponent(version)}`
+  );
+  return data as { status: string; segment_id: number; illustration_url: string };
 }
 
 export async function regenerateSegment(bookId: string, segId: number) {

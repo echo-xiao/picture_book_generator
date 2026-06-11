@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from pathlib import Path
 from typing import Any
@@ -417,7 +418,13 @@ async def list_preprocessed_books() -> list[dict[str, Any]]:
 
 
 @router.delete("/api/book/{book_id}")
-async def delete_book_endpoint(book_id: str) -> dict[str, str]:
+async def delete_book_endpoint(
+    book_id: str,
+    user_key: str | None = Depends(_require_user_key),  # BYOK 403 gate when enforced
+) -> dict[str, str]:
+    # rmtree below — a book_id like ".." would delete the whole data dir.
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", book_id) or ".." in book_id:
+        raise HTTPException(status_code=400, detail="Invalid book id.")
     deleted = await delete_book(book_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Book not found.")

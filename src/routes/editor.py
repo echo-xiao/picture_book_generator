@@ -724,6 +724,68 @@ async def get_segment_illustration_history(book_id: str, seg_id: int) -> dict[st
     return {"images": images}
 
 
+@router.post("/api/book/{book_id}/segment/{seg_id}/restore-version")
+async def restore_segment_version(book_id: str, seg_id: int, version: str) -> dict[str, Any]:
+    """Make a historical illustration the current one (the editor's version
+    carousel calls this — without it, picking an old version only changed
+    local state and the PDF/viewer kept using the newest image)."""
+    import shutil
+    import time as _time
+
+    if not version.isdigit():
+        raise HTTPException(status_code=400, detail="Invalid version.")
+
+    analysis = _load_json(book_id, "analysis.json")
+    if not analysis:
+        raise HTTPException(status_code=404, detail="No analysis data found.")
+    segments = analysis.get("segments", [])
+    target = next((s for s in segments if s.get("id") == seg_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"Segment {seg_id} not found.")
+
+    ch_idx = target.get("chapter_idx", 0)
+    page_num = segment_page_num(segments, ch_idx, seg_id)
+    ch_base = GENERATED_DIR / book_id / "chapters" / f"ch{ch_idx:02d}"
+    pages_dir = ch_base / "pages"
+    history_dir = ch_base / "history"
+
+    restored = None
+    for ext in (".png", ".jpg"):
+        candidate = history_dir / f"page_{page_num:03d}_{version}{ext}"
+        if candidate.exists():
+            restored = candidate
+            break
+    if restored is None:
+        raise HTTPException(status_code=404, detail=f"Version {version} not found.")
+
+    # Move the current image (+ its quality verdict) into history, same naming
+    # scheme as the regen endpoints, so nothing is lost by restoring.
+    ts = int(_time.time())
+    history_dir.mkdir(parents=True, exist_ok=True)
+    for ext in (".png", ".jpg"):
+        current = pages_dir / f"page_{page_num:03d}{ext}"
+        if current.exists():
+            current.rename(history_dir / f"page_{page_num:03d}_{ts}{ext}")
+    quality_file = ch_base / "quality" / f"page_{page_num:03d}_quality.json"
+    if quality_file.exists():
+        quality_file.rename(history_dir / f"page_{page_num:03d}_{ts}_quality.json")
+
+    # Copy (not move) so the version stays listed in history.
+    pages_dir.mkdir(parents=True, exist_ok=True)
+    new_current = pages_dir / f"page_{page_num:03d}{restored.suffix}"
+    shutil.copy2(restored, new_current)
+    hist_quality = history_dir / f"page_{page_num:03d}_{version}_quality.json"
+    if hist_quality.exists():
+        quality_file.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(hist_quality, quality_file)
+
+    return {
+        "status": "restored",
+        "segment_id": seg_id,
+        "illustration_url": f"/static/{book_id}/chapters/ch{ch_idx:02d}/pages/{new_current.name}",
+    }
+
+
 @router.post("/api/book/{book_id}/segment/{seg_id}/simplify")
 async def simplify_segment_text(
     book_id: str, seg_id: int,

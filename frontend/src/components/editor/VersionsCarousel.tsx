@@ -12,7 +12,7 @@ interface HistoryImage {
 interface VersionsCarouselProps {
   historyImages: HistoryImage[];
   selectedSegment: Segment;
-  onSelectVersion: (url: string, quality: any) => void;
+  onSelectVersion: (img: HistoryImage) => void;
 }
 
 export default function VersionsCarousel({
@@ -28,21 +28,27 @@ export default function VersionsCarousel({
         Versions ({historyImages.length})
       </h3>
       <div className="flex gap-2 overflow-x-auto pb-2">
-        {historyImages.map((img, idx) => (
-          <div key={idx} className="shrink-0 w-20">
-            <img
-              src={`${API_BASE}${img.url}?t=${img.timestamp}`}
-              alt={img.version === "current" ? "Current" : `Version ${idx}`}
-              onClick={() => onSelectVersion(img.url, img.quality || null)}
-              className={`w-20 h-20 object-contain rounded-lg cursor-pointer border-2 transition-colors bg-gray-50 ${
-                selectedSegment?.illustration_url === img.url
-                  ? "border-coral"
-                  : "border-transparent hover:border-coral/50"
-              }`}
-            />
-            <p className="text-[9px] text-gray-400 text-center mt-0.5">{img.version === "current" ? "Current" : `v${idx}`}</p>
-          </div>
-        ))}
+        {historyImages.map((img, idx) => {
+          // Newest-first ordering → bigger number = newer, matching the
+          // character sheet panel's version labels.
+          const label = img.version === "current" ? "Current" : `v${historyImages.length - idx}`;
+          return (
+            <div key={idx} className="shrink-0 w-20">
+              <img
+                src={`${API_BASE}${img.url}?t=${img.timestamp}`}
+                alt={label}
+                title={img.version === "current" ? "Current version" : "Click to restore this version"}
+                onClick={() => onSelectVersion(img)}
+                className={`w-20 h-20 object-contain rounded-lg cursor-pointer border-2 transition-colors bg-gray-50 ${
+                  selectedSegment?.illustration_url === img.url
+                    ? "border-coral"
+                    : "border-transparent hover:border-coral/50"
+                }`}
+              />
+              <p className="text-[9px] text-gray-400 text-center mt-0.5">{label}</p>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

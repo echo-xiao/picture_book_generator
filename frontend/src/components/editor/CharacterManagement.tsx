@@ -111,31 +111,6 @@ export default function CharacterManagement({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
 
-  const handleSave = async () => {
-    if (!selectedChar) return;
-    const oldName = selectedChar;
-    const newName = editing.canonical_name || oldName;
-    setSaving(true);
-    try {
-      await updateCharacter(bookId, oldName, editing);
-      const data = await getCharacters(bookId);
-      onCharactersUpdate(
-        data.characters || [],
-        data.sheets || {},
-        oldName !== newName ? oldName : undefined,
-        oldName !== newName ? newName : undefined,
-      );
-      // Update local selectedChar to new name if renamed
-      if (oldName !== newName) {
-        setSelectedChar(newName);
-      }
-    } catch (e) {
-      console.error("Save failed:", e);
-    } finally {
-      setSaving(false);
-    }
-  };
-
   // Regenerate a character's sheet BY NAME (not the possibly-stale selectedChar),
   // poll until it lands, bust the preview cache, then auto quality-check.
   // Does NOT refresh the parent — the caller does that with the right rename args.
@@ -187,34 +162,41 @@ export default function CharacterManagement({
       return;
     }
     setGenAllRunning(true);
-    for (let i = 0; i < toGenerate.length; i++) {
-      const char = toGenerate[i];
-      setGenAllProgress(`${i + 1}/${toGenerate.length}`);
-      setGenAllCurrentChar(char.canonical_name);
-      try {
-        await regenerateCharacterSheet(bookId, char.canonical_name);
-        // Wait for sheet to appear
-        await new Promise<void>((resolve) => {
-          const poll = setInterval(async () => {
-            if (unmountedRef.current) { clearInterval(poll); resolve(); return; }
-            try {
-              const hist = await getCharacterSheetHistory(bookId, char.canonical_name);
-              if (hist.images?.some(img => img.version === "current")) {
-                clearInterval(poll);
-                resolve();
-              }
-            } catch {}
-          }, 10000);
-          setTimeout(() => { clearInterval(poll); resolve(); }, 240000);
-        });
-      } catch {}
+    try {
+      for (let i = 0; i < toGenerate.length; i++) {
+        const char = toGenerate[i];
+        setGenAllProgress(`${i + 1}/${toGenerate.length}`);
+        setGenAllCurrentChar(char.canonical_name);
+        try {
+          await regenerateCharacterSheet(bookId, char.canonical_name);
+          // Wait for sheet to appear
+          await new Promise<void>((resolve) => {
+            const poll = setInterval(async () => {
+              if (unmountedRef.current) { clearInterval(poll); resolve(); return; }
+              try {
+                const hist = await getCharacterSheetHistory(bookId, char.canonical_name);
+                if (hist.images?.some(img => img.version === "current")) {
+                  clearInterval(poll);
+                  resolve();
+                }
+              } catch {}
+            }, 10000);
+            setTimeout(() => { clearInterval(poll); resolve(); }, 240000);
+          });
+        } catch {}
+      }
+      // Final refresh
+      const finalData = await getCharacters(bookId);
+      onCharactersUpdate(finalData.characters || [], finalData.sheets || {});
+    } catch (e) {
+      console.error("Gen All refresh failed:", e);
+    } finally {
+      // Without this, a thrown refresh left genAllRunning true and the
+      // button disabled until a full page reload.
+      setGenAllProgress("");
+      setGenAllCurrentChar(null);
+      setGenAllRunning(false);
     }
-    // Final refresh
-    const finalData = await getCharacters(bookId);
-    onCharactersUpdate(finalData.characters || [], finalData.sheets || {});
-    setGenAllProgress("");
-    setGenAllCurrentChar(null);
-    setGenAllRunning(false);
   };
 
   const handleAutoFill = async () => {
