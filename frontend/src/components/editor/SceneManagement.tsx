@@ -30,6 +30,14 @@ export default function SceneManagement({ bookId, initialScene, onSelectScene, o
   const unmountedRef = useRef(false);
   useEffect(() => () => { unmountedRef.current = true; }, []);
 
+  // Snapshot of `editing` as of the last select/save — switching scenes with
+  // edits that differ from it asks for confirmation instead of silently
+  // dropping them (mirrors the character editor).
+  const editingBaselineRef = useRef<string>("");
+  const editingIsDirty = () =>
+    editingBaselineRef.current !== "" &&
+    JSON.stringify(editing) !== editingBaselineRef.current;
+
   useEffect(() => {
     getLocations(bookId)
       .then(data => {
@@ -42,6 +50,7 @@ export default function SceneManagement({ bookId, initialScene, onSelectScene, o
           const first = initial || data.locations[0];
           setSelectedLoc(first.name);
           setEditing(first.visual_details || {});
+          editingBaselineRef.current = JSON.stringify(first.visual_details || {});
           onSelectScene?.(first.name);
         }
         setLoading(false);
@@ -54,8 +63,13 @@ export default function SceneManagement({ bookId, initialScene, onSelectScene, o
   const minorLocs = locations.filter(l => l.importance !== "major");
 
   const selectLoc = (loc: any) => {
+    if (loc.name !== selectedLoc && editingIsDirty()
+        && !window.confirm("You have unsaved scene edits. Discard them?")) {
+      return;
+    }
     setSelectedLoc(loc.name);
     setEditing(loc.visual_details || {});
+    editingBaselineRef.current = JSON.stringify(loc.visual_details || {});
     setActiveSheetUrl(null);
     onSelectScene?.(loc.name);
   };
@@ -85,6 +99,8 @@ export default function SceneManagement({ bookId, initialScene, onSelectScene, o
       if (_name !== undefined) updates.name = newName;
       if (_description !== undefined) updates.description = _description;
       await updateScene(bookId, oldName, updates);
+      // Saved — this editing state is the new clean baseline.
+      editingBaselineRef.current = JSON.stringify(editing);
 
       // On rename: refresh the locations list and switch selection to the new
       // name UP FRONT, otherwise the left list / selectedLoc keep the old name

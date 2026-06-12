@@ -202,19 +202,9 @@ export async function checkSegmentQuality(bookId: string, segId: number) {
   return data;
 }
 
-export async function getChapterConsistency(bookId: string, chapterIdx: number) {
-  const { data } = await api.get(`/book/${bookId}/chapter/${chapterIdx}/consistency`);
-  return data;
-}
-
 export async function getStalePages(bookId: string, chIdx: number) {
   const { data } = await api.get(`/book/${bookId}/chapter/${chIdx}/stale-pages`);
   return data as { stale: Array<{ page: number; segment_id: number; reasons: Array<{ type: "character" | "scene"; name: string }> }> };
-}
-
-export async function checkChapterConsistency(bookId: string, chapterIdx: number) {
-  const { data } = await api.post(`/book/${bookId}/chapter/${chapterIdx}/consistency`);
-  return data;
 }
 
 export async function checkCharacterSheetQuality(bookId: string, charName: string) {
@@ -230,17 +220,4 @@ export async function checkCharacterSheetQuality(bookId: string, charName: strin
     text_labels: { score: number; issues: string[] };
     regeneration_feedback: string;
   };
-}
-
-export async function chatWithAI(
-  bookId: string,
-  segId: number,
-  message: string,
-  history: Array<{ role: string; content: string }>
-) {
-  const { data } = await api.post(`/book/${bookId}/segment/${segId}/chat`, {
-    message,
-    history,
-  });
-  return data as { reply: string; updates: Record<string, unknown> };
 }

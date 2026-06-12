@@ -57,6 +57,15 @@ export default function CharacterManagement({
   const unmountedRef = useRef(false);
   useEffect(() => () => { unmountedRef.current = true; }, []);
 
+  // Snapshot of `editing` as of the last select/save — switching characters
+  // with edits that differ from it asks for confirmation instead of silently
+  // dropping them (segments already behave this way on chapter switch).
+  const editingBaselineRef = useRef<string>("");
+  const editingIsDirty = () =>
+    Object.keys(editing).length > 0 &&
+    editingBaselineRef.current !== "" &&
+    JSON.stringify(editing) !== editingBaselineRef.current;
+
   // Report selected char to parent via effect (avoids setState-during-render)
   useEffect(() => {
     if (selectedChar) onSelectChar?.(selectedChar);
@@ -64,6 +73,9 @@ export default function CharacterManagement({
 
   const selectChar = (char: CharacterInfo) => {
     if (selectedChar !== char.canonical_name) {
+      if (editingIsDirty() && !window.confirm("You have unsaved character edits. Discard them?")) {
+        return;
+      }
       setActiveSheetUrl(null);
       setQualityResult(null);
       // Show current sheet immediately as placeholder while history loads
@@ -71,14 +83,16 @@ export default function CharacterManagement({
       setSheetHistory(sheetUrl ? [{ url: sheetUrl, version: "current", timestamp: Date.now() }] : []);
     }
     setSelectedChar(char.canonical_name);
-    setEditing({
+    const snapshot = {
       canonical_name: char.canonical_name,
       gender: char.gender || "unknown",
       role: char.role || "supporting",
       appearance: char.appearance || "",
       description: char.description || "",
       visual_details: char.visual_details || {},
-    });
+    };
+    setEditing(snapshot);
+    editingBaselineRef.current = JSON.stringify(snapshot);
   };
 
   // Navigate to specific character when triggered from editor
@@ -209,6 +223,17 @@ export default function CharacterManagement({
         appearance: result.appearance || prev.appearance,
         visual_details: result.visual_details || prev.visual_details,
       }));
+      // The backend persisted the autofill, so fold it into the dirty-check
+      // baseline too — otherwise switching away after a plain autofill would
+      // ask to discard edits that are already saved.
+      try {
+        const base = JSON.parse(editingBaselineRef.current || "{}");
+        editingBaselineRef.current = JSON.stringify({
+          ...base,
+          appearance: result.appearance || base.appearance,
+          visual_details: result.visual_details || base.visual_details,
+        });
+      } catch {}
       // Refresh character data
       const data = await getCharacters(bookId);
       onCharactersUpdate(data.characters || [], data.sheets || {});
@@ -558,6 +583,8 @@ export default function CharacterManagement({
                   setSaving(true);
                   try {
                     await updateCharacter(bookId, oldName, editing);
+                    // Saved — this editing state is the new clean baseline.
+                    editingBaselineRef.current = JSON.stringify(editing);
                     // Refresh parent + switch selection to the new name UP FRONT,
                     // so the panel keeps the character selected (and regen targets
                     // the right sheet) while the slow regeneration runs.

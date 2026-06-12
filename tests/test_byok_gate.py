@@ -33,13 +33,6 @@ def test_generation_endpoints_403_without_key(client, require_user_key, path):
     assert "Gemini API key" in resp.json()["detail"]
 
 
-def test_generate_upload_is_gated(client, require_user_key):
-    # No file attached on purpose: the gate must 403 from the middleware
-    # before request validation gets a chance to 422.
-    resp = client.post("/api/generate/upload")
-    assert resp.status_code == 403
-
-
 def test_non_generation_post_is_not_gated(client, require_user_key):
     """Control: a non-generation path must NOT be blocked by the gate.
     regen-status only has a GET route, so the router answers 405 — the point

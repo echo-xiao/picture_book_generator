@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 
 from src.config import GENERATED_DIR
@@ -188,8 +188,17 @@ async def _run_preprocess(book_id: str, dest: Path, gemini_api_key: str | None =
                 "error": stderr_text[-1000:] or "Unknown error",
                 "returncode": proc.returncode,
             }))
-    except Exception:
+    except Exception as e:
         logger.exception("Preprocess crashed for %s", book_id)
+        # Without a marker the progress endpoint reports "processing" forever
+        # and both loading screens spin until the user gives up.
+        try:
+            err_file.write_text(json.dumps({
+                "error": f"Preprocess crashed: {str(e)[:500]}",
+                "returncode": -1,
+            }))
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -263,50 +272,14 @@ async def start_generation(
     sanitized = _re.sub(r'[^\w\s\u4e00-\u9fff-]', '', first_line)
     book_id = _re.sub(r'\s+', '_', sanitized.strip()).lower()[:60] or "untitled"
 
-    # Save user info if provided. The key may arrive in the body config or the
-    # x-gemini-key header (the middleware only reads the header) — accept both,
-    # but only when the BYOK gate is on; otherwise a saved free-tier key would
+    # The key travels in the x-gemini-key header only (the BYOK middleware and
+    # gate read nothing else, so a body-only key could never reach this point).
+    # Honor it only when the gate is on; otherwise a saved free-tier key would
     # hijack generation away from the working project backend.
     from src.config import REQUIRE_USER_KEY
-    user_api_key = (request.config.gemini_api_key or header_key) if REQUIRE_USER_KEY else None
+    user_api_key = header_key if REQUIRE_USER_KEY else None
     if request.config.email:
         _save_user_info(book_id, request.config.email, user_api_key)
-
-    background_tasks.add_task(_run_preprocess, book_id, dest, gemini_api_key=user_api_key)
-
-    return {"book_id": book_id, "status": "preprocessing"}
-
-
-@router.post("/api/generate/upload")
-async def start_generation_upload(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    config: str = Form(default="{}"),
-    header_key: str | None = Depends(_require_user_key),  # BYOK 403 gate (belt to the middleware's braces)
-) -> dict[str, Any]:
-    """Start preprocess from file upload. Returns book_id for editor redirect."""
-    # PDF/EPUB support was removed — the extraction module only parses text.
-    if not (file.filename or "").lower().endswith(".txt"):
-        raise HTTPException(status_code=400, detail="Only .txt files are supported.")
-    upload_dir = GENERATED_DIR / "uploads"
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    dest = upload_dir / Path(file.filename or "upload.txt").name
-    contents = await file.read()
-    dest.write_bytes(contents)
-
-    # Use filename as book_id (fast, no parsing needed)
-    import re as _re
-    stem = Path(file.filename or "upload").stem
-    sanitized = _re.sub(r'[^\w\s\u4e00-\u9fff-]', '', stem)
-    book_id = _re.sub(r'\s+', '_', sanitized.strip()).lower()[:60] or "untitled"
-
-    # Extract API key from config form field, falling back to the header.
-    # Same BYOK gating as /api/generate above.
-    from src.config import REQUIRE_USER_KEY
-    parsed_config = json.loads(config) if config else {}
-    user_api_key = (parsed_config.get("gemini_api_key") or header_key) if REQUIRE_USER_KEY else None
-    if parsed_config.get("email"):
-        _save_user_info(book_id, parsed_config["email"], user_api_key)
 
     background_tasks.add_task(_run_preprocess, book_id, dest, gemini_api_key=user_api_key)
 

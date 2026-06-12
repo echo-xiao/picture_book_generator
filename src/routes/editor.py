@@ -757,22 +757,38 @@ async def restore_segment_version(book_id: str, seg_id: int, version: str) -> di
     if restored is None:
         raise HTTPException(status_code=404, detail=f"Version {version} not found.")
 
-    # Move the current image (+ its quality verdict) into history, same naming
-    # scheme as the regen endpoints, so nothing is lost by restoring.
-    ts = int(_time.time())
-    history_dir.mkdir(parents=True, exist_ok=True)
-    for ext in (".png", ".jpg"):
-        current = pages_dir / f"page_{page_num:03d}{ext}"
-        if current.exists():
-            current.rename(history_dir / f"page_{page_num:03d}_{ts}{ext}")
-    quality_file = ch_base / "quality" / f"page_{page_num:03d}_quality.json"
-    if quality_file.exists():
-        quality_file.rename(history_dir / f"page_{page_num:03d}_{ts}_quality.json")
-
-    # Copy (not move) so the version stays listed in history.
+    # Copy the restored version to a temp name FIRST: if the copy fails (disk
+    # full), the current image is still in place and nothing is lost. The old
+    # order renamed the current image away before copying — a failed copy left
+    # the page with no image at all.
     pages_dir.mkdir(parents=True, exist_ok=True)
-    new_current = pages_dir / f"page_{page_num:03d}{restored.suffix}"
-    shutil.copy2(restored, new_current)
+    tmp_restore = pages_dir / f".restore_tmp_{page_num:03d}{restored.suffix}"
+    shutil.copy2(restored, tmp_restore)
+
+    try:
+        # Archive the current image (+ its quality verdict) into history, same
+        # naming scheme as the regen endpoints, so nothing is lost by restoring.
+        # Bump ts past any taken slot — restoring a version archived this same
+        # second would otherwise overwrite the very history file just copied.
+        ts = int(_time.time())
+        history_dir.mkdir(parents=True, exist_ok=True)
+        while any(
+            (history_dir / f"page_{page_num:03d}_{ts}{suffix}").exists()
+            for suffix in (".png", ".jpg", "_quality.json")
+        ):
+            ts += 1
+        for ext in (".png", ".jpg"):
+            current = pages_dir / f"page_{page_num:03d}{ext}"
+            if current.exists():
+                current.rename(history_dir / f"page_{page_num:03d}_{ts}{ext}")
+        quality_file = ch_base / "quality" / f"page_{page_num:03d}_quality.json"
+        if quality_file.exists():
+            quality_file.rename(history_dir / f"page_{page_num:03d}_{ts}_quality.json")
+
+        new_current = pages_dir / f"page_{page_num:03d}{restored.suffix}"
+        tmp_restore.rename(new_current)
+    finally:
+        tmp_restore.unlink(missing_ok=True)
     hist_quality = history_dir / f"page_{page_num:03d}_{version}_quality.json"
     if hist_quality.exists():
         quality_file.parent.mkdir(parents=True, exist_ok=True)

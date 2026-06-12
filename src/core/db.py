@@ -12,6 +12,7 @@ Falls back gracefully if MongoDB is unavailable.
 """
 
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -26,6 +27,9 @@ _client: Optional[pymongo.MongoClient] = None
 _available: Optional[bool] = None
 _last_fail: float = 0.0
 _RETRY_AFTER = 30.0  # seconds to back off before retrying a failed connection
+# First connection can race between threadpool workers — without a lock each
+# loser builds (and leaks) its own MongoClient with live monitor threads.
+_client_lock = threading.Lock()
 
 
 def _get_db() -> Optional[pymongo.database.Database]:
@@ -38,24 +42,25 @@ def _get_db() -> Optional[pymongo.database.Database]:
     global _client, _available, _last_fail
     if _available is False and (time.time() - _last_fail) < _RETRY_AFTER:
         return None
-    try:
-        if _client is None:
-            _client = pymongo.MongoClient(MONGODB_URI, serverSelectionTimeoutMS=3000)
-            _client.admin.command("ping")
-            _available = True
-            logger.info("MongoDB connected: %s", MONGODB_URI)
-        return _client[MONGODB_DB]
-    except Exception as e:
-        _available = False
-        _last_fail = time.time()
-        if _client is not None:
-            try:
-                _client.close()  # release topology threads before dropping the ref
-            except Exception:
-                pass
-        _client = None  # reset so a later call can reconnect
-        logger.warning("MongoDB unavailable (%s); backing off %.0fs", e, _RETRY_AFTER)
-        return None
+    with _client_lock:
+        try:
+            if _client is None:
+                _client = pymongo.MongoClient(MONGODB_URI, serverSelectionTimeoutMS=3000)
+                _client.admin.command("ping")
+                _available = True
+                logger.info("MongoDB connected: %s", MONGODB_URI)
+            return _client[MONGODB_DB]
+        except Exception as e:
+            _available = False
+            _last_fail = time.time()
+            if _client is not None:
+                try:
+                    _client.close()  # release topology threads before dropping the ref
+                except Exception:
+                    pass
+            _client = None  # reset so a later call can reconnect
+            logger.warning("MongoDB unavailable (%s); backing off %.0fs", e, _RETRY_AFTER)
+            return None
 
 
 def is_available() -> bool:
@@ -148,11 +153,13 @@ def update_character(book_id: str, canonical_name: str, updates: dict) -> bool:
     db = _get_db()
     if db is None:
         return False
-    db.characters.update_one(
+    result = db.characters.update_one(
         {"book_id": book_id, "canonical_name": canonical_name},
         {"$set": updates},
     )
-    return True
+    # matched_count, not blind True: the editor's Mongo-fallback path uses this
+    # to decide between "updated" and 404 for characters that don't exist.
+    return result.matched_count > 0
 
 
 # ═══════════════════════════════════════════════════════════════

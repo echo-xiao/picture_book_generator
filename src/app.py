@@ -85,7 +85,7 @@ app.add_middleware(TimeoutMiddleware)
 # (Background-task generation also sets the key explicitly in its task closure /
 # subprocess env, since the request context is gone by the time those run.)
 _GEN_SUFFIXES = (
-    "/generate", "/generate/upload", "/regenerate", "/simplify", "/background",
+    "/generate", "/regenerate", "/simplify", "/background",
     "/summarize", "/chat", "/autofill", "/quality", "/consistency",
 )
 
@@ -127,7 +127,6 @@ _RATE_LIMITS: dict[str, tuple[int, int]] = {
     "/api/fetch-url": (10, 60),        # 10 fetches / minute
     "/api/feedback": (5, 60),          # 5 feedback posts / minute
     "/api/generate": (5, 60),          # 5 generation kickoffs / minute
-    "/api/generate/upload": (5, 60),
 }
 _rate_buckets: dict[tuple[str, str], deque] = {}
 

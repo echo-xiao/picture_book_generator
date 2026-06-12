@@ -368,12 +368,15 @@ async def generate_chapter_endpoint(
     key = (book_id, ch_idx)
     if key in _active_generations:
         return {"status": "already_generating", "book_id": book_id, "chapter": ch_idx}
-    _active_generations.add(key)
 
-    # Initialize progress file
+    # Initialize progress file BEFORE claiming the key: if this raises (e.g.
+    # disk full), the key must not stay claimed — only _gen's finally releases
+    # it, and _gen never runs. No await between the check above and the add
+    # below, so the claim stays race-free on the event loop.
     progress_file = GENERATED_DIR / book_id / "chapters" / f"ch{ch_idx:02d}" / "progress.json"
     progress_file.parent.mkdir(parents=True, exist_ok=True)
     progress_file.write_text(json.dumps({"status": "starting", "progress": 0, "current_step": "Starting...", "total_pages": 0, "completed_pages": 0}))
+    _active_generations.add(key)
 
     async def _gen():
         import asyncio as _asyncio
@@ -474,33 +477,6 @@ async def get_chapter_progress(book_id: str, ch_idx: int) -> dict[str, Any]:
         "current_step": f"Page {completed}/{total}",
         "total_pages": total, "completed_pages": completed,
     }
-
-
-@router.get("/api/book/{book_id}/segment/{seg_id}/quality")
-async def get_segment_quality(book_id: str, seg_id: int, version: str = "current") -> dict[str, Any]:
-    """Get cached quality check result for a segment. Use version=current or a timestamp."""
-    analysis = _load_json(book_id, "analysis.json")
-    if not analysis:
-        return {}
-
-    segments = analysis.get("segments", [])
-    target = next((s for s in segments if s.get("id") == seg_id), None)
-    if not target:
-        return {}
-
-    ch_idx = target.get("chapter_idx", 0)
-    page_num = segment_page_num(segments, ch_idx, seg_id)
-
-    ch_base = GENERATED_DIR / book_id / "chapters" / f"ch{ch_idx:02d}"
-
-    if version == "current":
-        quality_file = ch_base / "quality" / f"page_{page_num:03d}_quality.json"
-    else:
-        quality_file = ch_base / "history" / f"page_{page_num:03d}_{version}_quality.json"
-
-    if quality_file.exists():
-        return json.loads(quality_file.read_text(encoding="utf-8"))
-    return {}
 
 
 @router.post("/api/book/{book_id}/segment/{seg_id}/quality")

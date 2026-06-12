@@ -29,6 +29,7 @@ import {
 } from "@/lib/api";
 import type { Segment, ChapterInfo, CharacterInfo } from "@/types";
 import { setActionField, addAction, removeAction } from "@/lib/segment";
+import { isSegmentPageStep } from "@/lib/progress";
 
 import IllustrationPanel from "@/components/editor/IllustrationPanel";
 import QualityCheckPanel from "@/components/editor/QualityCheckPanel";
@@ -1106,7 +1107,7 @@ export default function EditorPage() {
                   })()}
 
                   {segments.map((seg, idx) => {
-                    const isGenerating = generatingChapter === +chIdx && chapterProgress?.current_step?.includes(`page ${idx + 1}/`);
+                    const isGenerating = generatingChapter === +chIdx && isSegmentPageStep(chapterProgress?.current_step, idx);
                     const hasIllustration = !!seg.illustration_url;
                     return (
                     <button
