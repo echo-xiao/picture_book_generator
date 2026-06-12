@@ -28,7 +28,12 @@ export default function SceneManagement({ bookId, initialScene, onSelectScene, o
 
   // Stop handler-started polls after the component unmounts.
   const unmountedRef = useRef(false);
-  useEffect(() => () => { unmountedRef.current = true; }, []);
+  // Reset on mount — StrictMode (dev) remounts reuse the ref, and without the
+  // reset the cleanup left it permanently true, killing every poll's first tick.
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => { unmountedRef.current = true; };
+  }, []);
 
   // Snapshot of `editing` as of the last select/save — switching scenes with
   // edits that differ from it asks for confirmation instead of silently

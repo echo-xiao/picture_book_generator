@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 import time
@@ -231,6 +230,11 @@ Return JSON: {{"locations": [{{...}}]}}""")
 def _build_alias_map(characters: list[dict]) -> dict[str, str]:
     """Build multi-word alias → canonical_name map."""
     alias_map = {}
+    # Aliases claimed by more than one character are banned outright — without
+    # the tombstone, a third character (or a duplicate alias entry later in
+    # the list) re-added the alias mapping to itself, and _replace_aliases
+    # then rewrote that phrase to the wrong name across the whole book text.
+    banned: set[str] = set()
     for char in characters:
         canonical = char.get("canonical_name", "")
         if not canonical:
@@ -241,8 +245,11 @@ def _build_alias_map(characters: list[dict]) -> dict[str, str]:
                 continue
             if len(alias_lower.split()) < 2:
                 continue  # Single words too ambiguous for global replace
+            if alias_lower in banned:
+                continue
             if alias_lower in alias_map and alias_map[alias_lower] != canonical:
                 del alias_map[alias_lower]
+                banned.add(alias_lower)
                 continue
             alias_map[alias_lower] = canonical
     return alias_map
@@ -362,9 +369,32 @@ Return JSON: {{"annotations": [...]}}"""
     annotations = {}
     for idx, a in enumerate(raw_annotations):
         key = a.get("scene_number", idx + 1)
+        # LLMs occasionally return scene_number as a string ("1") — a str key
+        # never matches the int lookup below, silently blanking every field.
+        try:
+            key = int(key)
+        except (TypeError, ValueError):
+            key = idx + 1
         annotations[key] = a
+
+    # A parseable-but-misnumbered response (empty list, 0-based numbering,
+    # wrong count) used to blank every segment AND get checkpointed under a
+    # valid fingerprint — permanently, since later runs replay the checkpoint.
+    # Treat "nothing matched" as a failure so the caller skips the checkpoint
+    # and the chapter is re-annotated on the next run.
+    matched = sum(1 for i in range(len(segments)) if (i + 1) in annotations)
+    if segments and matched == 0:
+        raise ValueError(
+            f"LLM annotations match none of {len(segments)} segments "
+            f"(got scene_numbers {sorted(annotations)[:10]})"
+        )
+
     for i, seg in enumerate(segments):
-        ann = annotations.get(i + 1, {})
+        ann = annotations.get(i + 1)
+        if not ann:
+            # No annotation for this segment — leave its fields untouched
+            # rather than overwriting them with empty defaults.
+            continue
         llm_chars = ann.get("characters_in_scene")
         if llm_chars is not None:
             # characters_in_scene is now [{name, action}, ...]
@@ -505,10 +535,8 @@ def _layer1_extract_text(input_path, book_id, preprocess_dir):
 
 def _layer2_identify_characters(book_id, preprocess_dir, chapters, title):
     """Layer 2: LLM character identification + location identification."""
-    provider = "DeepSeek" if os.getenv("TEXT_LLM", "deepseek") == "deepseek" else "Gemini"
-
     # Characters
-    print(f"\n[Layer 2/6] LLM character identification ({provider})...")
+    print("\n[Layer 2/6] LLM character identification (Gemini)...")
     t0 = time.time()
     characters = _llm_identify_characters(title, chapters)
     print(f"  {len(characters)} characters in {time.time() - t0:.1f}s:")

@@ -1,7 +1,4 @@
-"""Unified LLM client for text tasks. Supports DeepSeek and Gemini.
-
-Uses DeepSeek by default (cheaper), switches to Gemini via TEXT_LLM env var.
-Image generation always uses Gemini (separate module).
+"""Unified LLM client for text tasks. Gemini-only.
 
 Usage:
     from src.llm_client import generate_json
@@ -14,47 +11,9 @@ import logging
 import time
 from typing import Any
 
-from src.config import (
-    DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,
-    GEMINI_API_KEY, GEMINI_MODEL, GEMINI_BACKEND,
-    TEXT_LLM,
-)
+from src.config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_BACKEND
 
 logger = logging.getLogger(__name__)
-
-
-def _call_deepseek(prompt: str, system: str = "", max_retries: int = 3, max_tokens: int = 8192) -> str:
-    """Call DeepSeek API (OpenAI-compatible)."""
-    from openai import OpenAI
-
-    client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
-
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-
-    for attempt in range(max_retries):
-        try:
-            response = client.chat.completions.create(
-                model=DEEPSEEK_MODEL,
-                messages=messages,
-                response_format={"type": "json_object"},
-                max_tokens=max_tokens,
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            error_str = str(e).lower()
-            if any(kw in error_str for kw in ["rate limit", "429", "503"]) and attempt < max_retries - 1:
-                wait = 2 ** (attempt + 1)
-                logger.warning("DeepSeek rate limit, retrying in %ds: %s", wait, e)
-                time.sleep(wait)
-                continue
-            if attempt < max_retries - 1:
-                logger.warning("DeepSeek error (attempt %d): %s", attempt + 1, e)
-                time.sleep(2)
-                continue
-            raise
 
 
 def _call_gemini(prompt: str, system: str = "", max_retries: int = 3) -> str:
@@ -94,7 +53,7 @@ def _call_gemini(prompt: str, system: str = "", max_retries: int = 3) -> str:
 
 
 def generate_json(prompt: str, system: str = "", max_retries: int = 3) -> dict[str, Any]:
-    """Generate JSON from text LLM (DeepSeek or Gemini based on config).
+    """Generate JSON from Gemini.
 
     Args:
         prompt: The user prompt.
@@ -104,25 +63,9 @@ def generate_json(prompt: str, system: str = "", max_retries: int = 3) -> dict[s
     Returns:
         Parsed JSON dict.
     """
-    provider = TEXT_LLM.lower()
-
-    if provider == "deepseek":
-        if not DEEPSEEK_API_KEY:
-            if GEMINI_BACKEND == "vertex" or GEMINI_API_KEY:
-                logger.warning("TEXT_LLM=deepseek but DEEPSEEK_API_KEY not set, falling back to Gemini")
-                raw = _call_gemini(prompt, system, max_retries)
-            else:
-                raise ValueError("TEXT_LLM=deepseek but DEEPSEEK_API_KEY is not set.")
-        else:
-            raw = _call_deepseek(prompt, system, max_retries)
-            logger.debug("Using DeepSeek for text LLM")
-    elif provider == "gemini":
-        if GEMINI_BACKEND != "vertex" and not GEMINI_API_KEY:
-            raise ValueError("TEXT_LLM=gemini but GEMINI_API_KEY is not set.")
-        raw = _call_gemini(prompt, system, max_retries)
-        logger.debug("Using Gemini for text LLM")
-    else:
-        raise ValueError(f"Unknown TEXT_LLM provider: {provider}. Use 'deepseek' or 'gemini'.")
+    if GEMINI_BACKEND != "vertex" and not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY is not set (and GEMINI_BACKEND is not 'vertex').")
+    raw = _call_gemini(prompt, system, max_retries)
 
     try:
         return json.loads(raw)

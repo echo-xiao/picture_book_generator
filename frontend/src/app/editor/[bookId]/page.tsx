@@ -170,15 +170,22 @@ export default function EditorPage() {
   // stop instead of polling — and in Gen All's case launching new chapter
   // generations — for minutes after the user navigates away.
   const unmountedRef = useRef(false);
-  useEffect(() => () => {
-    unmountedRef.current = true;
-    // Stop the Gen All LOOP too, not just its polls — otherwise after the
-    // user navigates away each poll resolves early and the loop fires
-    // generateChapter for every remaining chapter in quick succession.
-    genAllChaptersRef.current = false;
-    // A pending scene-background debounce would otherwise still fire its
-    // updateSegment + paid LLM call after the user has left the page.
-    if (sceneRegenTimer.current) clearTimeout(sceneRegenTimer.current);
+  useEffect(() => {
+    // Reset on mount: React StrictMode (dev) runs setup→cleanup→setup and the
+    // ref survives that remount — without this reset the cleanup below left
+    // unmountedRef permanently true, so every poll guard bailed on its first
+    // tick and Gen All launched every chapter's generation back-to-back.
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+      // Stop the Gen All LOOP too, not just its polls — otherwise after the
+      // user navigates away each poll resolves early and the loop fires
+      // generateChapter for every remaining chapter in quick succession.
+      genAllChaptersRef.current = false;
+      // A pending scene-background debounce would otherwise still fire its
+      // updateSegment + paid LLM call after the user has left the page.
+      if (sceneRegenTimer.current) clearTimeout(sceneRegenTimer.current);
+    };
   }, []);
 
   // Warn before leaving the page (View Book is a full navigation) while

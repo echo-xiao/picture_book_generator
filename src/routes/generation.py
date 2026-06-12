@@ -256,6 +256,18 @@ async def regenerate_segment_illustration(
             [page_prompt], character_sheets, book_id,
             pages_dir=str(ch_dir),
         )
+
+        # generate_illustrations does NOT raise when every Gemini attempt fails —
+        # it returns image_path="" and only logs. The current image was already
+        # moved to history above, so without this check the page silently loses
+        # its image while the marker below still reports "complete".
+        if not any((ch_dir / f"page_{page_num:03d}{ext}").exists() for ext in (".png", ".jpg")):
+            _restore_from_history(ch_dir / f"page_{page_num:03d}",
+                                  history_dir / f"page_{page_num:03d}_{ts}")
+            write_json_atomic(ch_base / f"regen_{seg_id}.json",
+                              {"status": "error", "segment_id": seg_id,
+                               "error": "Image generation failed (all attempts)."})
+            return
         logger.info("Regeneration complete for segment %d (page %d)", seg_id, page_num)
 
         # Auto QA + bounded self-correction via the SHARED page service — same
@@ -347,15 +359,11 @@ async def regenerate_segment_illustration(
             # endpoint returned "generating" forever and the page image (already
             # moved to history) stayed blank. Restore it + write an error marker.
             logger.exception("Regen failed for segment %d", seg_id)
-            try:
-                import shutil as _sh
-                for ext in (".png", ".jpg"):
-                    h = history_dir / f"page_{page_num:03d}_{ts}{ext}"
-                    if h.exists():
-                        _sh.copy2(h, ch_dir / f"page_{page_num:03d}{ext}")
-                        break
-            except Exception:
-                pass
+            # Restores ONLY if no new file was generated — the old inline copy
+            # here clobbered a freshly generated image when the exception came
+            # from a later step (e.g. the marker write).
+            _restore_from_history(ch_dir / f"page_{page_num:03d}",
+                                  history_dir / f"page_{page_num:03d}_{ts}")
             write_json_atomic(ch_base / f"regen_{seg_id}.json",
                               {"status": "error", "segment_id": seg_id, "error": str(e)[:300]})
         finally:
@@ -898,7 +906,7 @@ async def regenerate_scene_sheet(
             old.rename(history_dir / f"{safe}_scene_{ts}{ext}")
 
     async def _gen_inner():
-        from src.config import IMAGE_LLM, DEFAULT_STYLE, NEGATIVE_PROMPT
+        from src.config import DEFAULT_STYLE, NEGATIVE_PROMPT
 
         # Load location details
         llm_locs = _load_json(book_id, "llm_locations.json") or {}
@@ -921,13 +929,6 @@ async def regenerate_scene_sheet(
             f"Style: {DEFAULT_STYLE}. "
             f"NOT: {NEGATIVE_PROMPT}, people, characters, figures, silhouettes"
         )
-
-        out_path = scenes_dir / f"{safe}_scene"
-
-        if IMAGE_LLM == "alicloud":
-            from src.generation.alicloud_image import generate_image_alicloud
-            generate_image_alicloud(prompt, out_path)
-            return
 
         def _gen_scene_image():
             from google import genai

@@ -111,6 +111,24 @@ class QAAgent:
         for c in result.get("character_consistency", {}).get("characters", []):
             self.per_character_scores.setdefault(c["name"], []).append(c.get("score", 100))
 
+    def discard_result(self, result: dict) -> None:
+        """Remove a superseded result from this run's aggregates.
+
+        Self-correction checks a page twice (original + retry) but only one
+        image survives — the loser's page entry and per-character scores must
+        not be averaged into the chapter summary. No-ops if the result was
+        never recorded.
+        """
+        for i, r in enumerate(self.per_page_results):
+            if r is result:
+                del self.per_page_results[i]
+                break
+        for c in result.get("character_consistency", {}).get("characters", []):
+            scores = self.per_character_scores.get(c.get("name", ""), [])
+            score = c.get("score", 100)
+            if score in scores:
+                scores.remove(score)
+
     def check_style_coherence(
         self, illustrations: list[dict], chapter_dir: Path,
     ) -> dict:

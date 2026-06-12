@@ -164,13 +164,16 @@ class ArtistAgent:
             if progress_callback:
                 progress_callback(idx, f"Illustrating page {page_num}/{total}...")
 
+            # Matching scene background sheet (same as illustration.py) —
+            # computed for cached pages too, so a later self-correct retry
+            # keeps the same references as the original generation.
+            scene_bg = page_prompt.get("scene_background", "")
+            scene_sheet = _find_scene_sheet(self.book_id, scene_bg) if scene_bg else None
+
             if existing:
                 print(f"  Page {page_num}: cached")
                 ill_path = existing
             else:
-                # Matching scene background sheet (same as illustration.py)
-                scene_bg = page_prompt.get("scene_background", "")
-                scene_sheet = _find_scene_sheet(self.book_id, scene_bg) if scene_bg else None
                 t0 = time.time()
                 success, ill_path, prompt = _generate_single_page(
                     img_client, page_prompt, valid_sheets, save_path,
@@ -181,11 +184,6 @@ class ArtistAgent:
                     print(f"  Page {page_num}: FAILED ({dt:.1f}s)")
                     illustrations.append({"page_number": page_num, "image_path": "", "prompt_used": prompt})
                     continue
-                for ext in (".png", ".jpg"):
-                    candidate = save_path.with_suffix(ext)
-                    if candidate.exists():
-                        ill_path = str(candidate)
-                        break
                 print(f"  Page {page_num}: generated ({dt:.1f}s)")
 
             illustrations.append({"page_number": page_num, "image_path": ill_path, "prompt_used": ""})
@@ -230,6 +228,7 @@ class ArtistAgent:
                     ill_path = self._self_correct_page(
                         img_client, page_prompt, valid_sheets, save_path, ill_path,
                         result, qa_agent, character_sheets, scene, page_num, chapter_dir,
+                        style_ref_path=style_ref_path, scene_sheet=scene_sheet,
                     )
                     illustrations[-1]["image_path"] = ill_path
 
@@ -248,6 +247,8 @@ class ArtistAgent:
         scene: dict,
         page_num: int,
         chapter_dir: Path,
+        style_ref_path: str | None = None,
+        scene_sheet: str | None = None,
     ) -> str:
         """Regenerate one low-scoring page using QA feedback (max 1 retry).
 
@@ -271,8 +272,11 @@ class ArtistAgent:
         quality_file = chapter_dir / "quality" / f"page_{page_num:03d}_quality.json"
         quality_file.parent.mkdir(parents=True, exist_ok=True)
 
+        # Same references as the original generation — the retry without the
+        # cover style ref and scene sheet came back off-style by construction.
         success, new_path, _ = _generate_single_page(
             img_client, page_prompt, valid_sheets, save_path,
+            style_ref_path, scene_sheet,
             correction_feedback=feedback,
         )
         if not success:
@@ -295,12 +299,21 @@ class ArtistAgent:
         kept_new = new_score >= old_score
         final = new_result if kept_new else old_result
 
-        if not kept_new:
+        # Both checks were recorded in the QA aggregates — drop the loser, or
+        # the chapter summary averages (and per-character scores) count the
+        # same page twice.
+        if kept_new:
+            qa_agent.discard_result(old_result)
+            # A retry that switched extensions (.png ↔ .jpg) leaves the old
+            # file in place, and .png-first probes elsewhere would resurrect
+            # the rejected image. The backup in history/ keeps it recoverable.
+            if str(old_file) != new_path:
+                old_file.unlink(missing_ok=True)
+        else:
             # Retry scored worse — restore the original image
+            qa_agent.discard_result(new_result)
             Path(new_path).unlink(missing_ok=True)
             shutil.copy2(backup, old_file)
-            if qa_agent.per_page_results and qa_agent.per_page_results[-1] is new_result:
-                qa_agent.per_page_results[-1] = old_result
 
         final["self_correct_attempted"] = True
         final["self_correct"] = {

@@ -14,7 +14,6 @@ import src.llm_client as llm_client
 def gemini_raw(monkeypatch):
     """Route generate_json to a canned Gemini response."""
     holder = {"raw": "{}"}
-    monkeypatch.setattr(llm_client, "TEXT_LLM", "gemini")
     monkeypatch.setattr(llm_client, "GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(llm_client, "_call_gemini", lambda *a, **k: holder["raw"])
     return holder
@@ -58,7 +57,8 @@ def test_garbage_raises_value_error(gemini_raw):
         llm_client.generate_json("p")
 
 
-def test_unknown_provider_raises(monkeypatch):
-    monkeypatch.setattr(llm_client, "TEXT_LLM", "claude")
-    with pytest.raises(ValueError, match="Unknown TEXT_LLM"):
+def test_missing_key_raises(monkeypatch):
+    monkeypatch.setattr(llm_client, "GEMINI_BACKEND", "api_key")
+    monkeypatch.setattr(llm_client, "GEMINI_API_KEY", "")
+    with pytest.raises(ValueError, match="GEMINI_API_KEY"):
         llm_client.generate_json("p")

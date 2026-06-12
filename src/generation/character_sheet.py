@@ -214,13 +214,6 @@ RULES:
 Style: {style}
 Do NOT include: {NEGATIVE_PROMPT}"""
 
-    from src.config import IMAGE_LLM
-
-    if IMAGE_LLM == "alicloud":
-        from src.generation.alicloud_image import generate_image_alicloud
-        result = generate_image_alicloud(prompt, portrait_path)
-        return result
-
     for attempt in range(2):
         try:
             response = client.models.generate_content(
@@ -307,45 +300,35 @@ def generate_character_sheets(
                     "\n\nIMPORTANT — a previous version of this sheet failed quality review. "
                     f"Fix these specific issues while keeping the character's identity:\n{correction_feedback}"
                 )
-            from src.config import IMAGE_LLM
+            import base64
+            contents: list = []
+            if portrait_path:
+                try:
+                    img_data = Path(portrait_path).read_bytes()
+                    mime = "image/png" if portrait_path.endswith(".png") else "image/jpeg"
+                    contents.append({"text": f"[REFERENCE PORTRAIT of {name}] — Match this character's face, hair, outfit EXACTLY in all views below."})
+                    contents.append({"inline_data": {"mime_type": mime, "data": base64.b64encode(img_data).decode()}})
+                except Exception:
+                    pass
+            contents.append({"text": prompt})
 
-            if IMAGE_LLM == "alicloud":
-                from src.generation.alicloud_image import generate_image_alicloud
-                ref_images = [portrait_path] if portrait_path else []
-                result = generate_image_alicloud(prompt, save_path, reference_images=ref_images)
-                if result:
-                    sheet_path = result
-            else:
-                # Gemini
-                import base64
-                contents: list = []
-                if portrait_path:
-                    try:
-                        img_data = Path(portrait_path).read_bytes()
-                        mime = "image/png" if portrait_path.endswith(".png") else "image/jpeg"
-                        contents.append({"text": f"[REFERENCE PORTRAIT of {name}] — Match this character's face, hair, outfit EXACTLY in all views below."})
-                        contents.append({"inline_data": {"mime_type": mime, "data": base64.b64encode(img_data).decode()}})
-                    except Exception:
-                        pass
-                contents.append({"text": prompt})
-
-                for attempt in range(2):
-                    try:
-                        response = client.models.generate_content(
-                            model=GEMINI_IMAGE_MODEL,
-                            contents=contents,
-                            config=genai.types.GenerateContentConfig(
-                                response_modalities=["TEXT", "IMAGE"],
-                                image_config=genai.types.ImageConfig(aspect_ratio="1:1"),
-                            ),
-                        )
-                        sheet_path = save_inline_image(response, save_path)
-                        if sheet_path:
-                            break
-                    except Exception as e:
-                        logger.warning("Sheet attempt %d for '%s' failed: %s", attempt + 1, name, e)
-                        if attempt == 0:
-                            time.sleep(2)
+            for attempt in range(2):
+                try:
+                    response = client.models.generate_content(
+                        model=GEMINI_IMAGE_MODEL,
+                        contents=contents,
+                        config=genai.types.GenerateContentConfig(
+                            response_modalities=["TEXT", "IMAGE"],
+                            image_config=genai.types.ImageConfig(aspect_ratio="1:1"),
+                        ),
+                    )
+                    sheet_path = save_inline_image(response, save_path)
+                    if sheet_path:
+                        break
+                except Exception as e:
+                    logger.warning("Sheet attempt %d for '%s' failed: %s", attempt + 1, name, e)
+                    if attempt == 0:
+                        time.sleep(2)
 
         role = profile.get("role", "unknown")
         results.append({

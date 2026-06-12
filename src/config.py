@@ -11,9 +11,6 @@ SAMPLE_BOOKS_DIR = DATA_DIR / "sample_books"
 
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
-# Environment: "test" (DeepSeek + Alicloud) or "production" (Gemini)
-APP_ENV = os.getenv("APP_ENV", "test")
-
 # Gemini — runs on Vertex AI / "Agent Platform" by default (GEMINI_BACKEND=vertex,
 # uses ADC locally and the attached service account on Cloud Run). Set
 # GEMINI_BACKEND=api_key to use the AI Studio key path instead.
@@ -29,22 +26,6 @@ GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image")
 # generation falls back to the project backend (Vertex) — convenient while it's
 # just the owner testing; a user-supplied key is still honored if present.
 REQUIRE_USER_KEY = os.getenv("REQUIRE_USER_KEY", "false").lower() == "true"
-
-# DeepSeek (text analysis)
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-DEEPSEEK_MODEL = "deepseek-chat"
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-
-# Alibaba Cloud / DashScope (image generation)
-ALICLOUD_API_KEY = os.getenv("ALICLOUD_API_KEY", "")
-ALICLOUD_IMAGE_MODEL = os.getenv("ALICLOUD_IMAGE_MODEL", "wan2.7-image-pro")
-
-# LLM selection based on environment (can be overridden by explicit env vars)
-_default_text_llm = "gemini" if APP_ENV == "production" else "deepseek"
-_default_image_llm = "gemini" if APP_ENV == "production" else "alicloud"
-
-TEXT_LLM = os.getenv("TEXT_LLM", _default_text_llm)   # "deepseek" or "gemini"
-IMAGE_LLM = os.getenv("IMAGE_LLM", _default_image_llm)  # "alicloud" or "gemini"
 
 # MongoDB
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")

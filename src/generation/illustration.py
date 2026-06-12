@@ -188,41 +188,19 @@ Do NOT include: {NEGATIVE_PROMPT}"""
     return prompt, in_scene_names
 
 
-def _extract_image(response: object, save_path: Path) -> bool:
-    """Save the first image from a Gemini response to disk."""
+def _extract_image(response: object, save_path: Path) -> str:
+    """Save the first image from a Gemini response to disk.
+
+    Returns the EXACT path written (extension comes from the response MIME
+    type), or "" if no image was found. Callers must use this path rather
+    than re-probing .png/.jpg — a stale file with the other extension at the
+    same stem would win the probe and be returned as the "new" image.
+    """
     final_path = save_inline_image(response, save_path)
     if final_path:
         logger.info("Saved illustration to %s", final_path)
-        return True
-    return False
-
-
-def _collect_reference_paths(
-    valid_sheets: list[dict],
-    in_scene_names: list[str] | None,
-    style_ref_path: str | None,
-    scene_sheet_path: str | None,
-) -> list[str]:
-    """Collect all reference image paths for alicloud provider."""
-    paths = []
-    if style_ref_path and Path(style_ref_path).exists():
-        paths.append(style_ref_path)
-    # Matched character sheets
-    for sheet in valid_sheets:
-        if len(paths) >= 4:
-            break
-        sp = sheet.get("sheet_path", "")
-        if not sp or not Path(sp).exists():
-            continue
-        if in_scene_names:
-            name_lower = sheet.get("character_name", "").lower()
-            if any(n.lower() in name_lower or name_lower in n.lower() for n in in_scene_names):
-                paths.append(sp)
-        else:
-            paths.append(sp)
-    if scene_sheet_path and Path(scene_sheet_path).exists() and len(paths) < 4:
-        paths.append(scene_sheet_path)
-    return paths[:4]
+        return final_path
+    return ""
 
 
 def _generate_single_page(
@@ -235,8 +213,6 @@ def _generate_single_page(
     correction_feedback: str | None = None,
 ) -> tuple[bool, str, str]:
     """Generate a single page illustration. Returns (success, image_path, prompt_used)."""
-    from src.config import IMAGE_LLM
-
     prompt_text, in_scene_names = _build_page_prompt(page, valid_sheets)
     if correction_feedback:
         prompt_text += (
@@ -246,15 +222,6 @@ def _generate_single_page(
             + correction_feedback
         )
 
-    if IMAGE_LLM == "alicloud":
-        from src.generation.alicloud_image import generate_image_alicloud
-        ref_paths = _collect_reference_paths(valid_sheets, in_scene_names, style_ref_path, scene_sheet_path)
-        result = generate_image_alicloud(prompt_text, save_path, reference_images=ref_paths)
-        if result:
-            return True, result, prompt_text
-        return False, "", prompt_text
-
-    # Default: Gemini
     contents = _build_reference_content(prompt_text, valid_sheets, style_ref_path, in_scene_names, scene_sheet_path)
 
     for attempt in range(MAX_RETRIES):
@@ -270,11 +237,9 @@ def _generate_single_page(
                 ),
             )
 
-            if _extract_image(response, save_path):
-                for ext in (".png", ".jpg"):
-                    candidate = save_path.with_suffix(ext)
-                    if candidate.exists():
-                        return True, str(candidate), prompt_text
+            saved = _extract_image(response, save_path)
+            if saved:
+                return True, saved, prompt_text
             return False, "", prompt_text
 
         except Exception as e:
