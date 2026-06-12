@@ -15,6 +15,9 @@ import pytest
 from fastapi import HTTPException
 
 from src.routes.books import MAX_FETCH_BYTES, _fetch_url_text
+# Bound at import time — the autouse no_dns fixture below replaces the module
+# attribute, but TestResolveSafeIp needs the real function.
+from src.routes.books import _resolve_safe_ip as _real_resolve_safe_ip
 
 
 @pytest.fixture(autouse=True)
@@ -64,3 +67,39 @@ def test_redirect_then_capped_body():
     with pytest.raises(HTTPException) as exc:
         _fetch(httpx.MockTransport(handler))
     assert exc.value.status_code == 413
+
+
+class TestResolveSafeIp:
+    """Cloud Run has no outbound IPv6 — picking getaddrinfo's first entry
+    (an AAAA there) hung every fetch to a dual-stack host (gutenberg.org!)
+    until the proxy cut it at 30s. IPv4 must win when present."""
+
+    @staticmethod
+    def _info(family, addr):
+        import socket
+        return (family, socket.SOCK_STREAM, 6, "", (addr, 0))
+
+    def test_prefers_ipv4_even_when_ipv6_listed_first(self, monkeypatch):
+        import socket
+        monkeypatch.setattr(socket, "getaddrinfo", lambda host, port: [
+            self._info(socket.AF_INET6, "2610:28:3090:3000:0:bad:cafe:47"),
+            self._info(socket.AF_INET, "152.19.134.47"),
+        ])
+        assert _real_resolve_safe_ip("www.gutenberg.org") == "152.19.134.47"
+
+    def test_v6_only_host_still_resolves(self, monkeypatch):
+        import socket
+        monkeypatch.setattr(socket, "getaddrinfo", lambda host, port: [
+            self._info(socket.AF_INET6, "2001:4860:4860::8888"),
+        ])
+        assert _real_resolve_safe_ip("v6only.example") == "2001:4860:4860::8888"
+
+    def test_private_ipv6_is_still_rejected(self, monkeypatch):
+        import socket
+        monkeypatch.setattr(socket, "getaddrinfo", lambda host, port: [
+            self._info(socket.AF_INET6, "::1"),
+            self._info(socket.AF_INET, "152.19.134.47"),
+        ])
+        with pytest.raises(HTTPException) as exc:
+            _real_resolve_safe_ip("evil.example")
+        assert exc.value.status_code == 400

@@ -48,6 +48,7 @@ def _resolve_safe_ip(host: str) -> str:
     except socket.gaierror:
         raise HTTPException(status_code=400, detail="Could not resolve URL host")
     ips: list[str] = []
+    v4: list[str] = []
     for info in infos:
         addr = info[4][0]
         ip = ipaddress.ip_address(addr)
@@ -55,9 +56,16 @@ def _resolve_safe_ip(host: str) -> str:
                 or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
             raise HTTPException(status_code=400, detail="URL resolves to a disallowed address")
         ips.append(addr)
+        if info[0] == socket.AF_INET:
+            v4.append(addr)
     if not ips:
         raise HTTPException(status_code=400, detail="Could not resolve URL host")
-    return ips[0]
+    # Prefer IPv4: Cloud Run has no outbound IPv6, and getaddrinfo there lists
+    # AAAA records first — connecting to one hung the full httpx timeout and
+    # the Next.js proxy cut the request at 30s (fetch-url 500'd for ANY host
+    # that publishes an AAAA, including gutenberg.org). Validation above still
+    # covers every returned address, v6 included.
+    return (v4 or ips)[0]
 
 
 # A whole novel is a few MB of plain text; 10 MB is generous. Reading the
@@ -71,7 +79,10 @@ async def _fetch_url_text(url: str, max_redirects: int = 6,
     """GET text from a public URL, following redirects manually and pinning
     each hop to a validated IP (Host header + TLS SNI keep the real hostname).
     Streams the body and aborts past MAX_FETCH_BYTES."""
-    async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:
+    # 20s, NOT 30s: the in-container Next.js proxy cuts upstream requests at
+    # ~30s — with an equal httpx timeout our clean 400 lost the race and the
+    # client saw a bare proxy 500 instead.
+    async with httpx.AsyncClient(timeout=20, follow_redirects=False, transport=transport) as client:
         current = url
         for _ in range(max_redirects):
             p = urlparse(current)
