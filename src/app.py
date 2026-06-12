@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
+import time
+from collections import deque
 from pathlib import Path
 
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
@@ -16,6 +19,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from src.config import GENERATED_DIR
+
+logger = logging.getLogger("picture_book")
 
 GCS_BUCKET = os.getenv("GCS_BUCKET", "picture-book-gen-assets")
 from src.routes import books, editor, generation  # noqa: E402 — needs GCS_BUCKET set first
@@ -111,6 +116,52 @@ class BYOKMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(BYOKMiddleware)
+
+
+# Rate limiting — per-client-IP sliding window on the public POST endpoints, so
+# one caller can't hammer the URL fetcher / feedback box / generation kickoff.
+# In-memory is fine: the service runs as a single instance (max-instances=1);
+# the window resets on restart. Keyed on the real client IP from X-Forwarded-For
+# (Cloud Run sets it; request.client is the proxy).
+_RATE_LIMITS: dict[str, tuple[int, int]] = {
+    "/api/fetch-url": (10, 60),        # 10 fetches / minute
+    "/api/feedback": (5, 60),          # 5 feedback posts / minute
+    "/api/generate": (5, 60),          # 5 generation kickoffs / minute
+    "/api/generate/upload": (5, 60),
+}
+_rate_buckets: dict[tuple[str, str], deque] = {}
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        limit = _RATE_LIMITS.get(request.url.path)
+        if limit and request.method == "POST":
+            max_n, window = limit
+            fwd = request.headers.get("x-forwarded-for", "")
+            ip = (fwd.split(",")[0].strip() if fwd else None) or (request.client.host if request.client else "?")
+            now = time.time()
+            dq = _rate_buckets.setdefault((ip, request.url.path), deque())
+            while dq and dq[0] <= now - window:
+                dq.popleft()
+            if len(dq) >= max_n:
+                return JSONResponse({"detail": "Too many requests — please slow down."}, status_code=429)
+            dq.append(now)
+            # Opportunistic cleanup so idle IPs don't accumulate forever.
+            if len(_rate_buckets) > 5000:
+                for k in [k for k, v in _rate_buckets.items() if not v]:
+                    _rate_buckets.pop(k, None)
+        return await call_next(request)
+
+
+app.add_middleware(RateLimitMiddleware)
+
+
+# Log any unhandled exception (with traceback) so failures are visible in Cloud
+# Logging instead of vanishing into a bare 500.
+@app.exception_handler(Exception)
+async def _log_unhandled_exception(request: Request, exc: Exception):
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse({"error": "Internal server error"}, status_code=500)
 
 # Serve generated images / assets — local first, fallback to GCS
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
