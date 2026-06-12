@@ -33,16 +33,23 @@ logger = logging.getLogger(__name__)
 from src.agents.progress import update_progress as _update_progress  # noqa: E402
 
 
+# Payload the web subprocess leaves for the FastAPI parent to apply under its
+# editor lock (see IllustrateQAStage._write_text_sync_payload).
+TEXT_SYNC_FILENAME = "text_sync.json"
+
+
 class PipelineContext:
     """Mutable state shared across the ADK pipeline stages."""
 
-    def __init__(self, book_id, data, chapter_idx, page_filter, age_group, self_correct):
+    def __init__(self, book_id, data, chapter_idx, page_filter, age_group, self_correct,
+                 defer_text_sync: bool = False):
         self.book_id = book_id
         self.data = data
         self.chapter_idx = chapter_idx
         self.page_filter = page_filter
         self.age_group = age_group
         self.self_correct = self_correct
+        self.defer_text_sync = defer_text_sync
 
         analysis = data.get("analysis", {})
         self.characters = analysis.get("characters", [])
@@ -164,13 +171,28 @@ class WriterStage(_Stage):
             return
 
         _update_progress(c.book_id, c.chapter_idx, agent="writer", current_step="Simplifying text for kids...", progress=30)
-        log_event(c.book_id, c.chapter_idx, "writer", "simplify_text",
-                  f"Simplifying {len(c.scenes)} scenes for age {c.age_group}")
         writer = WriterAgent(age_group=c.age_group)
         chapter_char_names = {s["character_name"] for s in c.character_sheets}
         chapter_chars = [p for p in c.profiles if p.get("name") in chapter_char_names]
-        c.simplified = writer.simplify(c.scenes, characters=chapter_chars, character_sheets=c.character_sheets)
-        log_event(c.book_id, c.chapter_idx, "writer", "simplify_text", f"Simplified {len(c.simplified)} pages", status="done")
+
+        # Same semantics as the single-page regen endpoint: a page that already
+        # HAS text (user-edited in the editor, or from a previous run) keeps it.
+        # Re-simplifying everything overwrote user edits and — because the
+        # Artist skips pages whose image already exists — left the new text
+        # permanently out of sync with the text painted into the cached image.
+        to_write = [s for s in c.scenes if not s.get("simplified_text")]
+        kept = [
+            {**s, "page_text": s["simplified_text"]}
+            for s in c.scenes if s.get("simplified_text")
+        ]
+        log_event(c.book_id, c.chapter_idx, "writer", "simplify_text",
+                  f"Simplifying {len(to_write)} scenes for age {c.age_group}"
+                  + (f" ({len(kept)} pages keep their existing text)" if kept else ""))
+        fresh = writer.simplify(to_write, characters=chapter_chars,
+                                character_sheets=c.character_sheets) if to_write else []
+        c.simplified = sorted(kept + fresh, key=lambda s: s.get("page_number", 0))
+        log_event(c.book_id, c.chapter_idx, "writer", "simplify_text",
+                  f"Simplified {len(fresh)} pages, kept {len(kept)}", status="done")
 
         _update_progress(c.book_id, c.chapter_idx, agent="writer", current_step="Building illustration prompts...", progress=35)
         log_event(c.book_id, c.chapter_idx, "writer", "build_prompts", f"Building {len(c.simplified)} illustration prompts")
@@ -219,7 +241,10 @@ class IllustrateQAStage(_Stage):
         log_event(c.book_id, c.chapter_idx, "qa", "summarize", "Quality summary complete", status="done")
 
         c.chapter_data = self._save_chapter_data(c)
-        self._sync_text_to_analysis(c)
+        if c.defer_text_sync:
+            self._write_text_sync_payload(c)
+        else:
+            self._sync_text_to_analysis(c)
 
         if not c.page_filter:
             c.artist.ensure_ending_pages(c.data, c.chapter_idx, c.segments)
@@ -280,6 +305,29 @@ class IllustrateQAStage(_Stage):
         chapter_data_path.write_text(
             json.dumps(chapter_data, indent=2, default=str, ensure_ascii=False), encoding="utf-8")
         return chapter_data
+
+    @staticmethod
+    def _write_text_sync_payload(c: PipelineContext) -> None:
+        """Web path: leave the text sync for the FastAPI parent instead of
+        writing analysis.json from this subprocess.
+
+        The editor serializes analysis.json writes with an asyncio lock that
+        lives in the parent's memory — a direct load→save here couldn't see
+        it, so a segment edit saved in that window was silently clobbered
+        (and GCS fuse offers no cross-process file lock to close the gap).
+        The parent applies this payload under the same lock after we exit.
+        """
+        from src.routes.helpers import write_json_atomic
+        payload = [
+            {
+                "segment_id": s.get("source_segment_id"),
+                "simplified_text": s.get("page_text", ""),
+                "scene_direction": s.get("scene_direction", ""),
+            }
+            for s in c.simplified if s.get("page_text")
+        ]
+        write_json_atomic(c.chapter_dir / TEXT_SYNC_FILENAME, payload)
+        print(f"  text sync deferred to parent: {len(payload)} pages")
 
     @staticmethod
     def _sync_text_to_analysis(c: PipelineContext) -> None:
@@ -359,8 +407,10 @@ async def _run_async(ctx: PipelineContext) -> None:
 
 
 def run_adk_pipeline(book_id: str, data: dict, chapter_idx: int, page_filter: list[int] | None = None,
-                     age_group: str = "4-6", self_correct: bool = False) -> dict | None:
+                     age_group: str = "4-6", self_correct: bool = False,
+                     defer_text_sync: bool = False) -> dict | None:
     """Run the book-generation pipeline via the ADK SequentialAgent. Returns chapter_data."""
-    ctx = PipelineContext(book_id, data, chapter_idx, page_filter, age_group, self_correct)
+    ctx = PipelineContext(book_id, data, chapter_idx, page_filter, age_group, self_correct,
+                          defer_text_sync=defer_text_sync)
     asyncio.run(_run_async(ctx))
     return ctx.chapter_data

@@ -131,6 +131,12 @@ class AnalyzerAgent:
                 "key_characters": present_chars[:5],
                 "character_actions": seg.get("character_actions", []),
                 "original_text": seg_text,
+                # Carry existing page text (user-edited or from a previous run)
+                # so the Writer stage can keep it instead of re-simplifying —
+                # re-running a chapter used to silently overwrite edits and
+                # diverge from the text already painted into cached page images.
+                "simplified_text": seg.get("simplified_text", ""),
+                "scene_direction": seg.get("scene_direction", ""),
             })
 
         return scenes

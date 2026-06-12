@@ -60,10 +60,18 @@ def _resolve_safe_ip(host: str) -> str:
     return ips[0]
 
 
-async def _fetch_url_text(url: str, max_redirects: int = 6) -> str:
+# A whole novel is a few MB of plain text; 10 MB is generous. Reading the
+# response un-streamed put the entire body in memory — a URL serving gigabytes
+# (or a slow infinite stream) OOM'd the single Cloud Run instance in one request.
+MAX_FETCH_BYTES = 10 * 1024 * 1024
+
+
+async def _fetch_url_text(url: str, max_redirects: int = 6,
+                          transport: httpx.AsyncBaseTransport | None = None) -> str:
     """GET text from a public URL, following redirects manually and pinning
-    each hop to a validated IP (Host header + TLS SNI keep the real hostname)."""
-    async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+    each hop to a validated IP (Host header + TLS SNI keep the real hostname).
+    Streams the body and aborts past MAX_FETCH_BYTES."""
+    async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:
         current = url
         for _ in range(max_redirects):
             p = urlparse(current)
@@ -75,12 +83,23 @@ async def _fetch_url_text(url: str, max_redirects: int = 6) -> str:
             host_header = p.hostname if p.port is None else f"{p.hostname}:{p.port}"
             extensions = {"sni_hostname": p.hostname} if p.scheme == "https" else {}
             req = client.build_request("GET", pinned, headers={"Host": host_header}, extensions=extensions)
-            resp = await client.send(req)
-            if resp.is_redirect and resp.headers.get("location"):
-                current = str(httpx.URL(current).join(resp.headers["location"]))
-                continue
-            resp.raise_for_status()
-            return resp.text
+            resp = await client.send(req, stream=True)
+            try:
+                if resp.is_redirect and resp.headers.get("location"):
+                    current = str(httpx.URL(current).join(resp.headers["location"]))
+                    continue
+                resp.raise_for_status()
+                declared = resp.headers.get("content-length")
+                if declared and declared.isdigit() and int(declared) > MAX_FETCH_BYTES:
+                    raise HTTPException(status_code=413, detail="File too large (max 10 MB of text)")
+                body = bytearray()
+                async for chunk in resp.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > MAX_FETCH_BYTES:
+                        raise HTTPException(status_code=413, detail="File too large (max 10 MB of text)")
+                return bytes(body).decode(resp.charset_encoding or "utf-8", errors="replace")
+            finally:
+                await resp.aclose()
     raise HTTPException(status_code=400, detail="Too many redirects")
 
 

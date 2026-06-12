@@ -124,6 +124,12 @@ def export_pdf(
         if image_path and os.path.exists(image_path):
             _draw_full_image_page(c, image_path, width, height)
         else:
+            if image_path:
+                # A recorded path that no longer exists means chapter_data has
+                # gone stale (e.g. a regen changed the extension) — say so
+                # instead of silently emitting a text-only page.
+                logger.warning("PDF page %s: image missing at %s — rendering text-only",
+                               page.get("page_number", "?"), image_path)
             text = page.get("text", "")
             if text:
                 bg = HexColor("#fffaf4")

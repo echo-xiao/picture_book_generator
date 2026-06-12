@@ -74,17 +74,47 @@ def _get_lock(key: str) -> threading.Lock:
 
 
 def _load_json(book_id: str, filename: str) -> dict | list | None:
-    """Load preprocess data from MongoDB first, fall back to local JSON file."""
+    """Load preprocess data from MongoDB first, fall back to local JSON file.
+
+    Freshness guard: _save_json writes BOTH stores best-effort, so a Mongo
+    blip during a save leaves the file updated but the doc stale — and
+    Mongo-first reads then shadowed the fresh file forever. When the local
+    file is clearly newer than the doc, the file wins and the doc is healed
+    from it (best-effort), closing the divergence instead of perpetuating it.
+    """
+    path = GENERATED_DIR / book_id / "preprocess" / filename
+
+    mongo_data = None
+    mongo_updated: str | None = None
     try:
-        from src.core.db import load_preprocess_file
-        data = load_preprocess_file(book_id, filename)
-        if data is not None:
-            return data
+        from src.core.db import load_preprocess_file_with_meta
+        result = load_preprocess_file_with_meta(book_id, filename)
+        if result is not None:
+            mongo_data, mongo_updated = result
     except Exception as e:
         logger.debug("MongoDB load failed for %s/%s: %s", book_id, filename, e)
 
+    if mongo_data is not None:
+        try:
+            if mongo_updated and path.exists():
+                from datetime import datetime
+                doc_ts = datetime.fromisoformat(mongo_updated).timestamp()
+                # 2s epsilon: a normal dual write lands in both stores within
+                # moments — only a clearly newer file indicates divergence.
+                if path.stat().st_mtime > doc_ts + 2:
+                    file_data = json.loads(path.read_text(encoding="utf-8"))
+                    try:
+                        from src.core.db import save_preprocess_file
+                        save_preprocess_file(book_id, filename, file_data)
+                        logger.info("Healed stale Mongo doc %s/%s from newer local file", book_id, filename)
+                    except Exception:
+                        pass  # heal is best-effort; the fresh file still wins below
+                    return file_data
+        except Exception as e:
+            logger.debug("Freshness check failed for %s/%s: %s", book_id, filename, e)
+        return mongo_data
+
     # Fallback to local file
-    path = GENERATED_DIR / book_id / "preprocess" / filename
     if not path.exists():
         return None
     try:
@@ -121,6 +151,44 @@ def segment_page_num(segments: list[dict], ch_idx: int, seg_id: int) -> int:
         key=lambda s: s.get("id", 0),
     )
     return next((i + 1 for i, s in enumerate(ch_segments) if s.get("id") == seg_id), 1)
+
+
+def update_chapter_data_page(book_id: str, ch_idx: int, page_num: int,
+                             image_path: str | None = None, text: str | None = None) -> None:
+    """Keep chapter_data.json's entry for one page in step after a
+    single-page change (regen / restore-version / text edit).
+
+    chapter_data.json is what the combined book.pdf build reads. Without this,
+    a regen that switched image extensions (.png → .jpg) left a dead absolute
+    path — a silently blank page in the next PDF — and edited or restored
+    text never reached it at all.
+    """
+    import re as _re
+
+    path = GENERATED_DIR / book_id / "chapters" / f"ch{ch_idx:02d}" / "chapter_data.json"
+    if not path.exists():
+        return  # chapter never generated — nothing to keep in step
+    lock = _get_lock(f"{book_id}/ch{ch_idx:02d}/chapter_data.json")
+    with lock:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
+        pages = data.get("pages", [])
+        for p in pages:  # legacy entries lack page_number — derive from filename
+            if "page_number" not in p:
+                m = _re.search(r"page_(\d+)", p.get("image_path", "") or "")
+                if m:
+                    p["page_number"] = int(m.group(1))
+        entry = next((p for p in pages if p.get("page_number") == page_num), None)
+        if entry is None:
+            return
+        if image_path:
+            entry["image_path"] = image_path
+        if text is not None:
+            entry["text"] = text
+        path.write_text(json.dumps(data, indent=2, default=str, ensure_ascii=False),
+                        encoding="utf-8")
 
 
 def _save_json(book_id: str, filename: str, data: Any) -> None:

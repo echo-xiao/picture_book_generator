@@ -40,6 +40,7 @@ def generate_chapter(
     page_filter: list[int] | None = None,
     age_group: str = "4-6",
     self_correct: bool = False,
+    defer_text_sync: bool = False,
 ) -> dict | None:
     """Generate a chapter by running the ADK SequentialAgent pipeline.
 
@@ -50,6 +51,7 @@ def generate_chapter(
     return run_adk_pipeline(
         book_id, data, chapter_idx,
         page_filter=page_filter, age_group=age_group, self_correct=self_correct,
+        defer_text_sync=defer_text_sync,
     )
 
 
@@ -112,6 +114,11 @@ def main():
     parser.add_argument("--pdf-only", action="store_true", help="Only rebuild PDF")
     parser.add_argument("--self-correct", action="store_true",
                         help="Auto-regenerate pages whose QA score is below 50 (max 1 retry per page)")
+    parser.add_argument("--defer-text-sync", action="store_true",
+                        help="Don't write page text into analysis.json from this process; "
+                             "leave a text_sync.json payload for the FastAPI parent to apply "
+                             "under its editor lock (web flow only — standalone CLI runs "
+                             "should NOT pass this, or the sync never happens)")
     args = parser.parse_args()
 
     from src.agents.analyzer import AnalyzerAgent
@@ -162,7 +169,7 @@ def main():
 
     for ch_idx in chapter_indices:
         generate_chapter(args.book, data, ch_idx, page_filter=page_filter, age_group=args.age,
-                         self_correct=args.self_correct)
+                         self_correct=args.self_correct, defer_text_sync=args.defer_text_sync)
 
     # Rebuild the PDF from ALL generated chapters, not just the one(s) just
     # generated — otherwise regenerating one chapter clobbers the full-book PDF.

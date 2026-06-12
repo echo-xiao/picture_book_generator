@@ -13,7 +13,7 @@ from src.config import GENERATED_DIR
 from src.generation.character_sheet import _safe_filename
 from src.routes.helpers import (
     _active_regens, _load_json, _require_user_key, _save_json,
-    segment_page_num, write_json_atomic,
+    segment_page_num, update_chapter_data_page, write_json_atomic,
 )
 from starlette.concurrency import run_in_threadpool
 
@@ -305,6 +305,17 @@ async def regenerate_segment_illustration(
         except Exception as e:
             logger.warning("MongoDB sync failed for segment %d: %s", seg_id, e)
 
+        # Keep chapter_data.json (what the combined PDF reads) pointing at the
+        # new image + text — a regen that switched extensions used to leave a
+        # dead path there, silently blanking this page in the next book.pdf.
+        for ext in (".png", ".jpg"):
+            img = ch_dir / f"page_{page_num:03d}{ext}"
+            if img.exists():
+                update_chapter_data_page(book_id, ch_idx, page_num,
+                                         image_path=str(img),
+                                         text=simplified_text or target.get("text", ""))
+                break
+
         # The page image changed — the chapter-level consistency.json (served
         # verbatim by GET /chapter/{ch}/consistency) is stale now; drop it.
         try:
@@ -378,6 +389,46 @@ async def get_regen_status(book_id: str, seg_id: int) -> dict[str, Any]:
     return {"status": "generating"}
 
 
+async def _apply_deferred_text_sync(book_id: str, ch_idx: int) -> None:
+    """Apply the chapter subprocess's text-sync payload under the editor lock.
+
+    The subprocess used to write analysis.json itself, but its read-modify-
+    write couldn't see the parent's per-book asyncio lock — a segment edit
+    saved in that window was silently clobbered, and GCS fuse offers no
+    cross-process file lock to close the gap. Now only this process writes
+    analysis.json, serialized with every editor write. User text wins: a page
+    the user filled in during generation keeps their text (the pipeline only
+    generates text for pages that had none when it started).
+    """
+    payload_path = GENERATED_DIR / book_id / "chapters" / f"ch{ch_idx:02d}" / "text_sync.json"
+    if not payload_path.exists():
+        return
+    try:
+        payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        payload = []
+
+    from src.routes.editor import _analysis_lock
+    async with _analysis_lock(book_id):
+        analysis = _load_json(book_id, "analysis.json")
+        if analysis:
+            by_id = {s.get("id"): s for s in analysis.get("segments", [])}
+            changed = 0
+            for item in payload:
+                seg = by_id.get(item.get("segment_id"))
+                text = item.get("simplified_text", "")
+                if seg is None or not text or seg.get("simplified_text"):
+                    continue  # unknown segment, no text, or user/kept text — skip
+                seg["simplified_text"] = text
+                if item.get("scene_direction"):
+                    seg["scene_direction"] = item["scene_direction"]
+                changed += 1
+            if changed:
+                _save_json(book_id, "analysis.json", analysis)
+                logger.info("Applied deferred text sync for %s ch%02d: %d pages", book_id, ch_idx, changed)
+    payload_path.unlink(missing_ok=True)
+
+
 @router.post("/api/book/{book_id}/chapter/{ch_idx}/generate")
 async def generate_chapter_endpoint(
     book_id: str, ch_idx: int, background_tasks: BackgroundTasks,
@@ -410,12 +461,18 @@ async def generate_chapter_endpoint(
         if user_key:  # BYOK — bill the user's key; else fall back to project Vertex
             env["GEMINI_API_KEY"] = user_key
             env["GEMINI_BACKEND"] = "api_key"
+        # A payload left by a previous (crashed) run must not be applied to
+        # THIS run's analysis state.
+        (progress_file.parent / "text_sync.json").unlink(missing_ok=True)
         try:
             proc = await _asyncio.create_subprocess_exec(
                 # --self-correct: without it the QA stage is report-only — a
                 # failing page is still marked complete and never retried.
+                # --defer-text-sync: the subprocess can't see the parent's
+                # editor lock, so it leaves the analysis.json text sync as a
+                # payload that we apply below, serialized with editor writes.
                 sys.executable, "scripts/generate_chapter.py", "--book", book_id, "--chapter", str(ch_idx),
-                "--self-correct",
+                "--self-correct", "--defer-text-sync",
                 cwd=str(Path(__file__).parent.parent.parent),
                 stdout=_asyncio.subprocess.PIPE,
                 stderr=_asyncio.subprocess.PIPE,
@@ -430,6 +487,10 @@ async def generate_chapter_endpoint(
                 progress_file.write_text(json.dumps({"status": "failed", "progress": 100, "current_step": "Generation timed out", "total_pages": 0, "completed_pages": 0}))
                 return
             if proc.returncode == 0:
+                try:
+                    await _apply_deferred_text_sync(book_id, ch_idx)
+                except Exception:
+                    logger.exception("Deferred text sync failed for %s ch%02d", book_id, ch_idx)
                 progress_file.write_text(json.dumps({"status": "complete", "progress": 100, "current_step": "Done", "total_pages": 0, "completed_pages": 0}))
             else:
                 err_tail = (_stderr or b"").decode("utf-8", errors="replace")[-800:]

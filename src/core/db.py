@@ -260,6 +260,22 @@ def load_preprocess_file(book_id: str, filename: str) -> Optional[Any]:
     return doc.get("data")
 
 
+def load_preprocess_file_with_meta(book_id: str, filename: str) -> Optional[tuple[Any, Optional[str]]]:
+    """Like load_preprocess_file, but also returns the doc's updated_at ISO
+    timestamp so callers can detect a doc gone stale behind a newer local
+    file (a Mongo blip during save writes the file but not the doc)."""
+    db = _get_db()
+    if db is None:
+        return None
+    doc = db.preprocess_files.find_one(
+        {"book_id": book_id, "filename": filename},
+        {"_id": 0, "data": 1, "updated_at": 1},
+    )
+    if doc is None:
+        return None
+    return doc.get("data"), doc.get("updated_at")
+
+
 def list_preprocess_books() -> list[dict]:
     """List all books that have preprocess data in MongoDB."""
     db = _get_db()

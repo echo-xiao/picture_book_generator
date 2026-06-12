@@ -13,7 +13,9 @@ import asyncio
 
 from src.config import GENERATED_DIR
 from src.generation.character_sheet import _safe_filename
-from src.routes.helpers import _load_json, _require_user_key, _save_json, segment_page_num
+from src.routes.helpers import (
+    _load_json, _require_user_key, _save_json, segment_page_num, update_chapter_data_page,
+)
 from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger(__name__)
@@ -669,6 +671,16 @@ async def update_segment(book_id: str, seg_id: int, update: SegmentUpdate) -> di
     if "simplified_text" in update_dict or "text" in update_dict:
         _invalidate_page_quality(book_id, analysis.get("segments", []), seg_id)
 
+    # And keep chapter_data.json (the PDF's text source) in step — edited text
+    # used to stay stranded in analysis.json and never reach the next book.pdf.
+    if "simplified_text" in update_dict:
+        segments = analysis.get("segments", [])
+        ch_idx = target.get("chapter_idx", 0)
+        update_chapter_data_page(
+            book_id, ch_idx, segment_page_num(segments, ch_idx, seg_id),
+            text=update_dict["simplified_text"],
+        )
+
     # Sync to MongoDB (separate store — outside the file lock)
     try:
         from src.core.db import update_segment as db_update_segment
@@ -809,6 +821,10 @@ async def restore_segment_version(book_id: str, seg_id: int, version: str) -> di
         tmp_restore.rename(new_current)
     finally:
         tmp_restore.unlink(missing_ok=True)
+
+    # The restored image may have a different extension than the entry in
+    # chapter_data.json (the PDF's source) — keep it pointing at the new file.
+    update_chapter_data_page(book_id, ch_idx, page_num, image_path=str(new_current))
     hist_quality = history_dir / f"page_{page_num:03d}_{version}_quality.json"
     if hist_quality.exists():
         quality_file.parent.mkdir(parents=True, exist_ok=True)

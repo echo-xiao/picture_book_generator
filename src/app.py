@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import re
 import time
@@ -131,24 +132,55 @@ _RATE_LIMITS: dict[str, tuple[int, int]] = {
 _rate_buckets: dict[tuple[str, str], deque] = {}
 
 
+def _client_ip(request: Request) -> str:
+    """Best-effort real client IP for rate limiting.
+
+    Proxies APPEND the verified peer address to X-Forwarded-For, so only the
+    RIGHTMOST public entry is trustworthy — the left side is whatever the
+    client sent. Keying on the leftmost value let an attacker rotate a header
+    per request, bypassing the limiter entirely AND minting an unbounded
+    number of buckets. Internal hops (the in-container Next.js proxy shows up
+    as loopback) are skipped walking right-to-left.
+    """
+    fwd = request.headers.get("x-forwarded-for", "")
+    for part in reversed(fwd.split(",")):
+        part = part.strip()[:64]
+        if not part:
+            continue
+        try:
+            ip = ipaddress.ip_address(part)
+        except ValueError:
+            continue
+        if not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_unspecified):
+            return part
+    return request.client.host if request.client else "?"
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         limit = _RATE_LIMITS.get(request.url.path)
         if limit and request.method == "POST":
             max_n, window = limit
-            fwd = request.headers.get("x-forwarded-for", "")
-            ip = (fwd.split(",")[0].strip() if fwd else None) or (request.client.host if request.client else "?")
+            ip = _client_ip(request)
             now = time.time()
+            # Bound memory FIRST — before the 429 early-return, or a flood
+            # that trips the limit would skip cleanup entirely. Drop buckets
+            # idle past any window: the previous cleanup removed only EMPTY
+            # deques, which one-shot keys never become.
+            if len(_rate_buckets) > 5000:
+                stale_before = now - 300
+                for k in [k for k, v in _rate_buckets.items() if not v or v[-1] <= stale_before]:
+                    _rate_buckets.pop(k, None)
+                if len(_rate_buckets) > 20000:
+                    # Still growing under active flood — shedding limiter state
+                    # beats letting it OOM the instance.
+                    _rate_buckets.clear()
             dq = _rate_buckets.setdefault((ip, request.url.path), deque())
             while dq and dq[0] <= now - window:
                 dq.popleft()
             if len(dq) >= max_n:
                 return JSONResponse({"detail": "Too many requests — please slow down."}, status_code=429)
             dq.append(now)
-            # Opportunistic cleanup so idle IPs don't accumulate forever.
-            if len(_rate_buckets) > 5000:
-                for k in [k for k, v in _rate_buckets.items() if not v]:
-                    _rate_buckets.pop(k, None)
         return await call_next(request)
 
 
