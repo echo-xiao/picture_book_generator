@@ -10,7 +10,7 @@ import os
 import re
 import socket
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -363,19 +363,18 @@ class FeedbackRequest(BaseModel):
     context: str | None = None
 
 
-def _email_feedback_to_owner(msg: str, email: str | None, context: str | None) -> None:
-    """Best-effort: email a feedback note to the project owner's inbox.
+def _send_owner_email(subject: str, body: str, reply_to: str | None = None) -> bool:
+    """Best-effort email to the project owner's inbox. Returns True if sent.
 
-    Gated on SMTP env vars — when they're unset (e.g. local dev, or before the
-    owner adds a Gmail App Password) this is a no-op and the note still lives in
-    MongoDB/the file fallback. Never raises: a mail failure must not fail the
-    user's submission. Set SMTP_USER + SMTP_PASSWORD (a Gmail App Password) and
-    optionally FEEDBACK_EMAIL_TO to activate; default host smtp.gmail.com:587.
+    Gated on SMTP env vars — unset (local dev, or before the owner adds a Gmail
+    App Password) = no-op (returns False), never raises. Set SMTP_USER +
+    SMTP_PASSWORD (a Gmail App Password), optionally FEEDBACK_EMAIL_TO and
+    SMTP_HOST/SMTP_PORT (default smtp.gmail.com:587).
     """
     user = os.getenv("SMTP_USER", "").strip()
     password = os.getenv("SMTP_PASSWORD", "").strip()
     if not (user and password):
-        return  # not configured — note is already persisted elsewhere
+        return False
     to_addr = os.getenv("FEEDBACK_EMAIL_TO", "").strip() or user
     host = os.getenv("SMTP_HOST", "smtp.gmail.com").strip()
     port = int(os.getenv("SMTP_PORT", "587"))
@@ -383,23 +382,68 @@ def _email_feedback_to_owner(msg: str, email: str | None, context: str | None) -
         import smtplib
         from email.message import EmailMessage
         m = EmailMessage()
-        m["Subject"] = "📖 New Story Sprout feedback"
+        m["Subject"] = subject
         m["From"] = user
         m["To"] = to_addr
-        if email:
-            m["Reply-To"] = email  # owner can reply straight to the user
-        m.set_content(
-            f"Message:\n{msg}\n\n"
-            f"From: {email or '(no email given)'}\n"
-            f"Page: {context or '(unknown)'}\n"
-        )
+        if reply_to:
+            m["Reply-To"] = reply_to
+        m.set_content(body)
         with smtplib.SMTP(host, port, timeout=15) as s:
             s.starttls()
             s.login(user, password)
             s.send_message(m)
-        logger.info("Feedback emailed to owner")
+        return True
     except Exception as e:
-        logger.warning("Feedback email failed (note still saved): %s", e)
+        logger.warning("Owner email failed: %s", e)
+        return False
+
+
+def _email_feedback_to_owner(msg: str, email: str | None, context: str | None) -> None:
+    """Email a feedback note to the owner, Reply-To the user. No-op until SMTP
+    is configured; the note is already persisted regardless."""
+    _send_owner_email(
+        "📖 New Story Sprout feedback",
+        f"Message:\n{msg}\n\nFrom: {email or '(no email given)'}\nPage: {context or '(unknown)'}\n",
+        reply_to=email,
+    )
+
+
+def _format_usage_digest(data: dict, hours: int) -> str:
+    """Plain-text usage digest for the owner email."""
+    if not data.get("available"):
+        return "MongoDB was unavailable — no usage data for this window."
+    books = data["new_books"]
+    fb = data["feedback"]
+    lines = [f"Story Sprout — last {hours}h", ""]
+    lines.append(f"New books: {len(books)}")
+    for b in books[:50]:
+        lines.append(f"  • {b.get('title', '(untitled)')}  [{b.get('book_id', '?')}]  {b.get('created_at', '')[:19]}")
+    lines.append("")
+    lines.append(f"Feedback: {len(fb)}")
+    for f in fb[:50]:
+        who = f.get("email") or "(anon)"
+        lines.append(f"  • {who}: {(f.get('message') or '')[:200]}")
+    lines.append("")
+    lines.append(f"Total books all-time: {data['total_books']}")
+    return "\n".join(lines)
+
+
+@router.get("/api/admin/usage-digest")
+async def usage_digest(token: str = "", hours: int = 24) -> dict[str, Any]:
+    """Owner-only usage digest: books + feedback in the last `hours`, emailed to
+    the owner and returned as JSON. Token-gated via ADMIN_TOKEN (unset → always
+    403, so it can't be triggered until the owner sets a secret). Trigger daily
+    with Cloud Scheduler; or hit it manually with ?token=…."""
+    admin = os.getenv("ADMIN_TOKEN", "").strip()
+    if not admin or token != admin:
+        raise HTTPException(status_code=403, detail="Forbidden.")
+    hours = max(1, min(hours, 720))
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    from src.core.db import usage_since
+    data = usage_since(cutoff)
+    emailed = _send_owner_email(f"📊 Story Sprout usage — last {hours}h",
+                                _format_usage_digest(data, hours))
+    return {"emailed": emailed, **data}
 
 
 @router.post("/api/feedback")

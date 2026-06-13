@@ -126,6 +126,29 @@ def save_feedback(message: str, email: str | None = None, context: str | None = 
     return True
 
 
+def usage_since(cutoff_iso: str) -> dict:
+    """Activity since `cutoff_iso` for the owner's usage digest: books created
+    and feedback received in the window, plus the all-time book total. created_at
+    is stored as an ISO string, so a lexicographic $gte is a chronological one."""
+    db = _get_db()
+    if db is None:
+        return {"available": False, "new_books": [], "feedback": [], "total_books": 0}
+    new_books = list(db.books.find(
+        {"created_at": {"$gte": cutoff_iso}},
+        {"_id": 0, "title": 1, "book_id": 1, "created_at": 1},
+    ).sort("created_at", -1))
+    feedback = list(db.feedback.find(
+        {"created_at": {"$gte": cutoff_iso}},
+        {"_id": 0, "message": 1, "email": 1, "context": 1, "created_at": 1},
+    ).sort("created_at", -1))
+    return {
+        "available": True,
+        "new_books": new_books,
+        "feedback": feedback,
+        "total_books": db.books.count_documents({}),
+    }
+
+
 # ═══════════════════════════════════════════════════════════════
 # Characters collection
 # ═══════════════════════════════════════════════════════════════
