@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import json
 
-import pytest
 
 
 def test_spawn_crash_writes_error_marker(monkeypatch, tmp_path):

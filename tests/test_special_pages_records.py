@@ -120,3 +120,18 @@ def test_friendly_error_names_billing_for_free_tier():
     assert "BILLING" in msg
     assert friendly_gen_error(["429 rate limit"]).startswith("Gemini rate limit")
     assert friendly_gen_error([]) is None
+
+
+def test_alias_map_never_rewrites_another_canonical_name():
+    # LLM listed "Madame Defarge" (a real character) as Monsieur's alias —
+    # mapping it would rewrite her into him across the whole book text.
+    from src.preprocessing.pipeline import _build_alias_map
+    chars = [
+        {"canonical_name": "Monsieur Defarge",
+         "aliases": ["Madame Defarge", "the wine-shop keeper"]},
+        {"canonical_name": "Madame Defarge", "aliases": ["The Vengeance Knitter"]},
+    ]
+    amap = _build_alias_map(chars)
+    assert "madame defarge" not in amap
+    assert amap["the wine-shop keeper"] == "Monsieur Defarge"
+    assert amap["the vengeance knitter"] == "Madame Defarge"

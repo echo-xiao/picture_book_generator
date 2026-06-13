@@ -44,10 +44,6 @@ def test_oversized_body_is_aborted_mid_stream():
 
 
 def test_oversized_content_length_rejected_before_reading():
-    transport = httpx.MockTransport(lambda req: httpx.Response(
-        200, content=b"tiny", headers={"content-length-fake": "ignored",
-                                       "x-declared": "big"},
-    ))
     # Header-based early reject: declare 11 MB without sending it.
     def handler(req):
         resp = httpx.Response(200, content=b"")

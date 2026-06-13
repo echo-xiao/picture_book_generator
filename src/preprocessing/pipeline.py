@@ -237,6 +237,14 @@ def _build_alias_map(characters: list[dict]) -> dict[str, str]:
     # the list) re-added the alias mapping to itself, and _replace_aliases
     # then rewrote that phrase to the wrong name across the whole book text.
     banned: set[str] = set()
+    # An alias that IS another character's canonical name must never map: the
+    # LLM occasionally lists e.g. "Madame Defarge" as an alias of Monsieur
+    # Defarge, and the global replace would rewrite one character into the
+    # other across the entire book (text, segmentation, mention counts).
+    canonical_names = {
+        (c.get("canonical_name") or "").lower()
+        for c in characters if c.get("canonical_name")
+    }
     for char in characters:
         canonical = char.get("canonical_name", "")
         if not canonical:
@@ -245,6 +253,8 @@ def _build_alias_map(characters: list[dict]) -> dict[str, str]:
             alias_lower = alias.lower().strip()
             if not alias_lower or alias_lower == canonical.lower():
                 continue
+            if alias_lower in canonical_names:
+                continue  # someone else's canonical name — never rewrite it
             if len(alias_lower.split()) < 2:
                 continue  # Single words too ambiguous for global replace
             if alias_lower in banned:

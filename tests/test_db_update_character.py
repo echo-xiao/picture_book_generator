@@ -7,7 +7,6 @@ cascade) for characters that exist nowhere, instead of a 404.
 
 from __future__ import annotations
 
-import pytest
 
 from src.core import db
 

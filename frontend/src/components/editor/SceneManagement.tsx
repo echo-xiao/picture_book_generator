@@ -133,26 +133,22 @@ export default function SceneManagement({ bookId, initialScene, onSelectScene, o
         const poll = setInterval(async () => {
           if (unmountedRef.current) { stop(poll); resolve(); return; }
           try {
-            const hist = await getSceneSheetHistory(bookId, newName);
-            if (hist.images?.some(img => img.version === "current")) {
-              stop(poll);
+            // Claim lifecycle is the source of truth: on failure the backend
+            // restores the OLD sheet, so "current version exists" can't
+            // distinguish success from failure for an existing scene.
+            const st = await getRegenActive(bookId, "scene", newName).catch(() => null);
+            if (!st || st.active !== false) return;  // still running (or transient fetch error)
+            stop(poll);
+            setGenerating(null);
+            if (st.error) {
+              alert(`Regeneration failed: ${st.error}`);
+            } else {
               const data = await getLocations(bookId);
               setLocations(data.locations || []);
               setSceneSheets(data.scene_sheets || {});
               setSceneCacheBust(Date.now());
-              setGenerating(null);
-              resolve();
-              return;
             }
-            // No new sheet yet — if the backend dropped its regen claim, the
-            // run failed (it restores the old image, so the file watch can't tell).
-            const st = await getRegenActive(bookId, "scene", newName).catch(() => null);
-            if (st && st.active === false) {
-              stop(poll);
-              setGenerating(null);
-              alert(`Regeneration failed: ${st?.error || "check your API key/quota and try again."}`);
-              resolve();
-            }
+            resolve();
           } catch {}
         }, 5000);
         timeout = setTimeout(() => { clearInterval(poll); setGenerating(null); resolve(); }, 120000);

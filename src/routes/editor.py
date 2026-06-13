@@ -367,13 +367,35 @@ Return JSON:
 }}"""
     )
 
-    # Update the character data
+    # Write back via the project's LLM-write protocol (same as
+    # _merge_segment_fields): re-read FRESH under the book lock and merge only
+    # this character's fields — the pre-call `llm_chars` snapshot is seconds
+    # old, and writing it whole reverted every edit made during the LLM call.
+    update_dict: dict[str, Any] = {}
     if result.get("appearance"):
-        target["appearance"] = result["appearance"]
+        update_dict["appearance"] = result["appearance"]
     if result.get("visual_details"):
-        target["visual_details"] = result["visual_details"]
+        update_dict["visual_details"] = result["visual_details"]
 
-    _save_json(book_id, "llm_characters.json", llm_chars)
+    if update_dict:
+        async with _analysis_lock(book_id):
+            fresh = _load_json(book_id, "llm_characters.json") or {}
+            ftarget = next(
+                (c for c in fresh.get("characters", []) if c.get("canonical_name") == char_name),
+                None,
+            )
+            if ftarget is not None:
+                ftarget.update(update_dict)
+                _save_json(book_id, "llm_characters.json", fresh)
+                target = ftarget
+        # Sync the canonical `characters` collection too (best-effort, same as
+        # update_character) — every reader prefers it, so skipping this made
+        # autofill results vanish on refresh and sheet regens use the OLD look.
+        try:
+            from src.core.db import update_character as db_update_char
+            db_update_char(book_id, char_name, update_dict)
+        except Exception as e:
+            logger.debug("MongoDB sync skipped for autofill %s: %s", char_name, e)
 
     return {
         "appearance": target.get("appearance", ""),

@@ -14,7 +14,6 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-import src.app as app_module
 from src.app import _client_ip, _rate_buckets, app
 
 

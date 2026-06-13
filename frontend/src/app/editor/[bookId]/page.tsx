@@ -765,29 +765,27 @@ export default function EditorPage() {
       alert(`Sheet regeneration failed: ${err?.response?.data?.detail || err?.message || "unknown error"}`);
       return;
     }
-    // Poll until sheet is ready instead of blindly waiting
+    // Poll the regen CLAIM, not the file: on failure the backend restores the
+    // OLD sheet, so "file exists" can't distinguish success from failure —
+    // a failed regen on an existing sheet used to silently report success.
     const poll = setInterval(async () => {
       if (unmountedRef.current) { clearInterval(poll); return; }
       try {
-        const data = await getCharacters(bookId);
-        if (data.sheets?.[canonicalName]) {
-          clearInterval(poll);
-          setSheets(data.sheets || {});
-          setPortraits(data.portraits || {});
-          setSheetCacheBust(v => v + 1);  // sheet file reused its name — force reload
-          // Character sheet changed — pages depending on it are now stale.
-          // Via the ref: this poll runs up to 120s, the user may have
-          // switched chapters since it started.
-          refreshStale(selectedChapterRef.current);
+        const st = await getRegenActive(bookId, "character", canonicalName).catch(() => null);
+        if (!st || st.active !== false) return;  // still running (or transient fetch error)
+        clearInterval(poll);
+        if (st.error) {
+          alert(`Regeneration failed: ${st.error}`);
           return;
         }
-        // No new sheet yet — if the backend dropped its regen claim, the run
-        // failed (it restores the old image, so the file watch can't tell).
-        const st = await getRegenActive(bookId, "character", canonicalName).catch(() => null);
-        if (st && st.active === false) {
-          clearInterval(poll);
-          alert(`Regeneration failed: ${st?.error || "check your API key/quota and try again."}`);
-        }
+        const data = await getCharacters(bookId);
+        setSheets(data.sheets || {});
+        setPortraits(data.portraits || {});
+        setSheetCacheBust(v => v + 1);  // sheet file reused its name — force reload
+        // Character sheet changed — pages depending on it are now stale.
+        // Via the ref: this poll runs up to 120s, the user may have
+        // switched chapters since it started.
+        refreshStale(selectedChapterRef.current);
       } catch {}
     }, 5000);
     // 240s: sheet regen may now self-correct (2x generate + 2x QA worst case)
@@ -813,26 +811,25 @@ export default function EditorPage() {
         const poll = setInterval(async () => {
           if (unmountedRef.current) { stop(poll); resolve(); return; }
           try {
-            const data = await getSpecialPages(bookId);
-            const found = data.pages.find(p => p.type === spType && (p.chapter ?? 0) === spChapter);
-            if (found?.url) {
-              stop(poll);
-              setSpecialPages(data.pages || []);
-              setSelectedSpecial(found);
-              setSpecialCacheBust(Date.now());
-              setRegenSpecial(false);
-              resolve();
-              return;
-            }
-            // No new file yet — if the backend dropped its regen claim, the
-            // run failed (it restores the old image, so the file watch can't tell).
+            // Claim lifecycle is the source of truth: on failure the backend
+            // restores the OLD image, so "url exists" can't distinguish
+            // success from failure for a page that already had an image.
             const st = await getRegenActive(bookId, "special", `${spType}:${spChapter}`).catch(() => null);
-            if (st && st.active === false) {
-              stop(poll);
-              setRegenSpecial(false);
-              alert(`Regeneration failed: ${st?.error || "check your API key/quota and try again."}`);
-              resolve();
+            if (!st || st.active !== false) return;  // still running (or transient fetch error)
+            stop(poll);
+            setRegenSpecial(false);
+            if (st.error) {
+              alert(`Regeneration failed: ${st.error}`);
+            } else {
+              const data = await getSpecialPages(bookId).catch(() => null);
+              if (data) {
+                const found = data.pages.find(p => p.type === spType && (p.chapter ?? 0) === spChapter);
+                setSpecialPages(data.pages || []);
+                if (found) setSelectedSpecial(found);
+                setSpecialCacheBust(Date.now());
+              }
             }
+            resolve();
           } catch {}
         }, 5000);
         timeout = setTimeout(() => { clearInterval(poll); setRegenSpecial(false); resolve(); }, 120000);

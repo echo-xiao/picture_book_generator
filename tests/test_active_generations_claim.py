@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import pathlib
 
-import pytest
 
 
 def test_failed_kickoff_releases_the_chapter_claim(client, monkeypatch, tmp_path):
