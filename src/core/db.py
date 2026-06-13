@@ -4,7 +4,8 @@ Collections:
   books          — book metadata (title, book_id, status, created_at)
   characters     — character profiles (canonical_name, aliases, gender, appearance, sheet_path)
   preprocess_files — the per-book preprocess JSONs (analysis.json etc.), Mongo-first read
-  generation_log — LLM call logs (input, output, tokens, duration)
+  book_chapters  — generated chapter pages for the reader/PDF
+  statuses / feedback — generation status + user feedback
 
 All operations are synchronous (pymongo) for compatibility with scripts.
 Falls back gracefully if MongoDB is unavailable.
