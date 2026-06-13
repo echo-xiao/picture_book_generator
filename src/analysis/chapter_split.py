@@ -194,6 +194,11 @@ def split_into_segments(
             # Build segment dicts
             for sub_text in sub_segments:
                 if len(sub_text.split()) < 10:
+                    # Too short to be its own page — merge into the previous
+                    # segment so the text isn't silently dropped (it used to
+                    # vanish with no record, shrinking the book vs the source).
+                    if segments:
+                        segments[-1]["text"] += " " + sub_text
                     continue
                 sub_start = ch_text.find(sub_text[:50])
                 abs_start = ch_start + (sub_start if sub_start >= 0 else 0)

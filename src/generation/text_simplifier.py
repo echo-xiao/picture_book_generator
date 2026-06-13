@@ -202,12 +202,18 @@ def simplify_text(
     # Merge back into scene dicts
     page_map = {p.get("page_number", i + 1): p for i, p in enumerate(pages)}
     output = []
+    failed = 0
     for i, scene in enumerate(scenes):
         page_data = page_map.get(i + 1, page_map.get(scene.get("page_number", -1), {}))
-        page_text = page_data.get("page_text", scene.get("scene_summary", ""))
-        scene_direction = page_data.get("scene_direction", scene.get("scene_summary", ""))
+        llm_text = page_data.get("page_text") if isinstance(page_data, dict) else None
+        # No LLM page for this scene → the fallback is the UNSIMPLIFIED summary.
+        # Mark it failed (same discipline as Layer-6 annotation) instead of
+        # passing an adult-prose page off as a clean kids' page.
+        simplified = bool(llm_text)
+        page_text = llm_text or scene.get("scene_summary", "")
+        scene_direction = page_data.get("scene_direction") or scene.get("scene_summary", "")
 
-        output.append({
+        entry = {
             **scene,
             # Keep the scene's real page number — `i + 1` is always 1 on the
             # single-scene path and clobbered partial runs (e.g. --pages 13).
@@ -215,7 +221,15 @@ def simplify_text(
             "page_text": page_text,
             "scene_direction": scene_direction,
             "word_count": len(page_text.split()),
-        })
+        }
+        if not simplified:
+            entry["simplify_failed"] = True
+            failed += 1
+        output.append(entry)
 
-    logger.info("Rewrote %d pages", len(output))
+    if failed:
+        logger.warning("Rewrote %d pages — %d had NO LLM simplification (fell back to summary)",
+                       len(output), failed)
+    else:
+        logger.info("Rewrote %d pages", len(output))
     return output

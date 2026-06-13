@@ -71,3 +71,19 @@ def test_extra_llm_pages_are_truncated(llm):
 
 def test_empty_scenes_returns_empty(llm):
     assert ts.simplify_text([]) == []
+
+
+def test_unsimplified_page_is_marked_failed(llm):
+    """When the LLM returns no page for a scene, the fallback is the
+    UNSIMPLIFIED summary — it must be flagged simplify_failed, not passed off
+    as a clean kids' page (root cause C)."""
+    llm["response"] = {"pages": []}
+    out = ts.simplify_text([scene(1, text="Adult prose " * 30)])
+    assert len(out) == 1
+    assert out[0].get("simplify_failed") is True
+
+
+def test_simplified_page_not_marked(llm):
+    llm["response"] = {"pages": [{"page_number": 1, "page_text": "Clean kids text."}]}
+    out = ts.simplify_text([scene(1)])
+    assert not out[0].get("simplify_failed")
