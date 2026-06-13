@@ -40,7 +40,7 @@ export default function CharacterManagement({
   const [sheetCacheBust, setSheetCacheBust] = useState(0);
   const [checkingQuality, setCheckingQuality] = useState(false);
   const [qualityResult, setQualityResult] = useState<{
-    overall_score: number;
+    overall_score: number | null;
     character_name: string;
     is_group: boolean;
     appearance_match: { score: number; issues: string[] };
@@ -435,10 +435,14 @@ export default function CharacterManagement({
                 {qualityResult ? (
                   <>
                     <div className="flex items-center gap-2">
+                      {qualityResult.overall_score === null ? (
+                        <span className="text-sm font-semibold text-gray-400">QA unavailable — try again</span>
+                      ) : (
                       <span className={`text-xl font-bold ${
                         qualityResult.overall_score >= 80 ? "text-green-600" :
                         qualityResult.overall_score >= 60 ? "text-yellow-600" : "text-red-600"
                       }`}>{qualityResult.overall_score}%</span>
+                      )}
                       {qualityResult.is_group && (
                         <span className="text-[9px] bg-lavender/30 px-1.5 py-0.5 rounded text-gray-600">Group</span>
                       )}

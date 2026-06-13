@@ -202,9 +202,9 @@ class ArtistAgent:
                     if quality_file.exists():
                         try:
                             result = json.loads(quality_file.read_text(encoding="utf-8"))
-                            if result.get("qa_failed"):
-                                # A failed QA run was saved with a sentinel score
-                                # of 100 — don't trust it as a real report, re-run.
+                            if result.get("overall_score") is None:
+                                # A failed QA run (unknown score) — re-run rather
+                                # than trust it.
                                 result = None
                             else:
                                 qa_agent.record_cached(result)
@@ -219,7 +219,8 @@ class ArtistAgent:
                 if (
                     self_correct
                     and result
-                    and result.get("overall_score", 100) < self_correct_threshold
+                    and result.get("overall_score") is not None
+                    and result["overall_score"] < self_correct_threshold
                     and not result.get("self_correct_attempted")
                     and result.get("regeneration_feedback")
                 ):
@@ -293,9 +294,9 @@ class ArtistAgent:
         new_result = qa_agent.check_page(
             new_path, character_sheets, scene, page_num, chapter_dir,
         ) or {}
-        # If QA itself failed on the retry, its score is a sentinel 100 — don't
-        # trust it; keep the original rather than risk swapping in a worse image.
-        new_score = -1 if new_result.get("qa_failed") else new_result.get("overall_score", 0)
+        # None (QA failed/unknown) is NOT an improvement — keep the original.
+        _new = new_result.get("overall_score")
+        new_score = _new if _new is not None else -1
         kept_new = new_score >= old_score
         final = new_result if kept_new else old_result
 

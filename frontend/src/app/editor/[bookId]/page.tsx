@@ -119,7 +119,7 @@ export default function EditorPage() {
   const [genAllChapters, setGenAllChapters] = useState(false);
   const genAllChaptersRef = useRef(false);
   const [qualityResult, setQualityResult] = useState<{
-    overall_score: number;
+    overall_score: number | null;
     segment_id: number;
     page: number;
     character_consistency: { score: number; characters: Array<{ name: string; score: number; issues: string[] }> };

@@ -130,12 +130,12 @@ def test_regen_failure_restores_old_image(setup):
     assert result["overall_score"] == 10
 
 
-def test_qa_failed_sentinel_on_retry_keeps_original(setup):
-    """A failed QA run reports a sentinel 100 — it must NOT win the
-    keep-the-better comparison."""
+def test_qa_failed_on_retry_keeps_original(setup):
+    """A failed QA run reports overall_score None (UNKNOWN, not a perfect 100) —
+    it must NOT win the keep-the-better comparison."""
     setup["qa_results"] = [
         {"overall_score": 40, "regeneration_feedback": "fix"},
-        {"overall_score": 100, "qa_failed": True},
+        {"overall_score": None, "qa_failed": True},
     ]
 
     def regen(feedback):
@@ -146,7 +146,7 @@ def test_qa_failed_sentinel_on_retry_keeps_original(setup):
 
     assert setup["img"].read_bytes() == b"OLD"
     assert result["overall_score"] == 40
-    assert result["self_correct"]["new_score"] == -1
+    assert result["self_correct"]["new_score"] is None
     assert result["self_correct"]["kept"] == "old"
 
 

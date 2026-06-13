@@ -41,7 +41,7 @@ def check_page_quality(
     parts.append({"text": "[PAGE ILLUSTRATION to check]"})
     ill_part = _load_image_part(illustration_path)
     if not ill_part:
-        return {**_empty_page_quality(), "qa_failed": True}
+        return _empty_page_quality()
     parts.append(ill_part)
 
     # Add character sheets
@@ -147,7 +147,7 @@ Return JSON:
 
     except Exception as e:
         logger.warning("Page %d quality check failed: %s", page_num, e)
-        return {**_empty_page_quality(), "qa_failed": True}
+        return _empty_page_quality()
 
 
 def check_character_sheet_quality(
@@ -266,6 +266,9 @@ Return JSON:
         )
         result = _json.loads(response.text)
         result["character_name"] = character_name
+        # Recompute overall from the dimensions — never trust the LLM headline
+        # (it routinely passes a sheet whose appearance_match is 20).
+        _recompute_overall(result, _SHEET_QUALITY_DIMENSIONS)
 
         logger.info(
             "Character sheet quality for '%s': overall=%s, appearance=%s, consistency=%s, angles=%s, style=%s, text=%s",
@@ -285,11 +288,13 @@ Return JSON:
 
 
 def _empty_sheet_quality(character_name: str = "") -> dict:
-    # qa_failed marks this as a sentinel (the QA call itself failed), NOT a
-    # real perfect score — self-correct must never treat it as a 100.
+    # The QA call itself failed → the score is UNKNOWN, not perfect.
+    # overall_score is None (distinct from 100 by type), so every threshold
+    # comparison and aggregation treats it as no-data without a side flag.
+    # qa_failed is kept for older/UI readers.
     return {
         "qa_failed": True,
-        "overall_score": 100,
+        "overall_score": None,
         "character_name": character_name,
         "is_group": False,
         "appearance_match": {"score": 100, "issues": []},
@@ -302,8 +307,11 @@ def _empty_sheet_quality(character_name: str = "") -> dict:
 
 
 def _empty_page_quality() -> dict:
+    # Self-describing sentinel: qa_failed + overall_score None (UNKNOWN, not a
+    # perfect 100). Callers no longer tack on qa_failed themselves.
     return {
-        "overall_score": 100,
+        "qa_failed": True,
+        "overall_score": None,
         "character_consistency": {"score": 100, "characters": []},
         "spelling": {"score": 100, "errors": []},
         "duplicate_characters": {"score": 100, "duplicates": []},
@@ -320,6 +328,33 @@ _PAGE_QUALITY_DIMENSIONS = (
     "name_face_mismatch",
     "character_count",
 )
+
+_SHEET_QUALITY_DIMENSIONS = (
+    "appearance_match",
+    "internal_consistency",
+    "multi_angle",
+    "style_quality",
+    "text_labels",
+)
+
+
+def _recompute_overall(result: dict, dimensions: tuple[str, ...]) -> None:
+    """Overwrite overall_score with the mean of the given dimension scores.
+
+    The SINGLE place overall_score is computed for a real verdict — page AND
+    sheet both pass through here, so neither trusts the LLM's headline score
+    (which often disagrees with the dimensions, e.g. headline 85 while
+    appearance_match is 20 → a broken sheet must NOT pass).
+    """
+    scores = []
+    for dim in dimensions:
+        block = result.get(dim)
+        if not isinstance(block, dict):
+            block = {}
+            result[dim] = block
+        block["score"] = _coerce_score(block.get("score"))
+        scores.append(block["score"])
+    result["overall_score"] = round(sum(scores) / len(scores)) if scores else 100
 
 
 def _coerce_score(value) -> int:
@@ -342,16 +377,9 @@ def _normalize_page_quality(result: dict) -> dict:
     the top always matches the rows beneath it.
     """
     if not isinstance(result, dict):
-        return {**_empty_page_quality(), "qa_failed": True}
+        return _empty_page_quality()
 
-    scores = []
-    for dim in _PAGE_QUALITY_DIMENSIONS:
-        block = result.get(dim)
-        if not isinstance(block, dict):
-            block = {}
-            result[dim] = block
-        block["score"] = _coerce_score(block.get("score"))
-        scores.append(block["score"])
+    _recompute_overall(result, _PAGE_QUALITY_DIMENSIONS)
 
     # Ensure the list fields the frontend reads always exist.
     result["character_consistency"].setdefault("characters", [])
@@ -361,8 +389,6 @@ def _normalize_page_quality(result: dict) -> dict:
     result["character_count"].setdefault("missing", [])
     result["character_count"].setdefault("extra", [])
     result.setdefault("regeneration_feedback", "")
-
-    result["overall_score"] = round(sum(scores) / len(scores)) if scores else 100
     return result
 
 

@@ -73,8 +73,12 @@ class QAAgent:
         for c in result.get("character_consistency", {}).get("characters", []):
             self.per_character_scores.setdefault(c["name"], []).append(c.get("score", 100))
 
-        # Print summary
-        score = result.get("overall_score", 100)
+        # Print summary. None = the QA call failed (unknown), not a real score.
+        score = result.get("overall_score")
+        if score is None:
+            dt = time.time() - t0
+            print(f"  [QA Agent] Page {page_num}: QA unavailable (check failed) ({dt:.1f}s)")
+            return result
         issues = []
         if result.get("spelling", {}).get("errors"):
             issues.append(f"spell:{len(result['spelling']['errors'])}")
@@ -181,9 +185,9 @@ class QAAgent:
             # Style coherence
             style_result = self.check_style_coherence(illustrations, chapter_dir)
 
-            # Dimension scores — skip qa_failed sentinel entries (their score
-            # 100 is a failure marker, not a real measurement).
-            scored = [r for r in self.per_page_results if not r.get("qa_failed")]
+            # Dimension scores — skip failed entries (overall_score None means
+            # the QA call failed, not a real measurement).
+            scored = [r for r in self.per_page_results if r.get("overall_score") is not None]
             if not scored:
                 scored = self.per_page_results
             n = max(len(scored), 1)

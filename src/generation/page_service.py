@@ -59,12 +59,14 @@ def qa_and_self_correct(
         return res
 
     result = _qa(image_path)
+    score = result.get("overall_score")  # None when the QA call failed (unknown)
     if (
         self_correct
-        and result.get("overall_score", 100) < threshold
+        and score is not None
+        and score < threshold
         and result.get("regeneration_feedback")
     ):
-        old_score = result["overall_score"]
+        old_score = score
         feedback = result["regeneration_feedback"]
         bad = Path(image_path)
         history_dir.mkdir(parents=True, exist_ok=True)
@@ -85,10 +87,9 @@ def qa_and_self_correct(
             result["self_correct_attempted"] = True
         else:
             new_result = _qa(new_path)
-            # If QA itself failed on the retry, its score is a sentinel 100 — don't
-            # trust it; keep the original rather than risk swapping in a worse image.
-            new_score = -1 if new_result.get("qa_failed") else new_result.get("overall_score", 0)
-            kept_new = new_score >= old_score
+            # None (QA failed/unknown) is NOT an improvement — keep the original.
+            new_score = new_result.get("overall_score")
+            kept_new = new_score is not None and new_score >= old_score
             if not kept_new:
                 Path(new_path).unlink(missing_ok=True)
                 shutil.copy2(str(backup), str(bad))
@@ -99,10 +100,13 @@ def qa_and_self_correct(
                 "kept": "new" if kept_new else "old",
             }
 
-    quality_path.parent.mkdir(parents=True, exist_ok=True)
-    quality_path.write_text(
-        json.dumps(result, indent=2, default=str, ensure_ascii=False), encoding="utf-8"
-    )
+    # Don't cache a failed/unknown verdict (overall_score None) as if it were a
+    # real one — a later run would trust the stale "100s" and skip re-checking.
+    if result.get("overall_score") is not None:
+        quality_path.parent.mkdir(parents=True, exist_ok=True)
+        quality_path.write_text(
+            json.dumps(result, indent=2, default=str, ensure_ascii=False), encoding="utf-8"
+        )
     return result
 
 
@@ -132,13 +136,14 @@ def sheet_qa_and_self_correct(
         return check_character_sheet_quality(path, char_name, appearance, visual_details, gender, role)
 
     result = _qa(sheet_path)
+    score = result.get("overall_score")  # None when the QA call failed (unknown)
     if (
         regenerate_fn is not None
-        and not result.get("qa_failed")  # sentinel 100 — don't trust, don't retry
-        and result.get("overall_score", 100) < threshold
+        and score is not None
+        and score < threshold
         and result.get("regeneration_feedback")
     ):
-        old_score = result["overall_score"]
+        old_score = score
         bad = Path(sheet_path)
         history_dir.mkdir(parents=True, exist_ok=True)
         # COPY (not move): the retry overwrites the current path in place, and a
@@ -148,8 +153,8 @@ def sheet_qa_and_self_correct(
         new_path = regenerate_fn(result["regeneration_feedback"]) or ""
         if new_path:
             new_result = _qa(new_path)
-            new_score = -1 if new_result.get("qa_failed") else new_result.get("overall_score", 0)
-            kept_new = new_score >= old_score
+            new_score = new_result.get("overall_score")  # None = QA failed/unknown
+            kept_new = new_score is not None and new_score >= old_score
             if kept_new:
                 # Extension drift cleanup: a .jpg retry leaves the old .png in
                 # place and the UI's glob would resurrect the rejected sheet.
@@ -166,8 +171,8 @@ def sheet_qa_and_self_correct(
             }
         result["self_correct_attempted"] = True
 
-    # Never cache the qa_failed sentinel as if it were a real verdict.
-    if not result.get("qa_failed"):
+    # Never cache a failed/unknown verdict (overall_score None) as a real one.
+    if result.get("overall_score") is not None:
         quality_path.parent.mkdir(parents=True, exist_ok=True)
         quality_path.write_text(
             json.dumps(result, indent=2, default=str, ensure_ascii=False), encoding="utf-8"

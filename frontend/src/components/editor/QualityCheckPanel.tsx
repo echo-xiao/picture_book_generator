@@ -1,7 +1,7 @@
 import { Shield } from "lucide-react";
 
 interface QualityResult {
-  overall_score: number;
+  overall_score: number | null;  // null = the QA call failed (unknown, not 100)
   segment_id: number;
   page: number;
   character_consistency: { score: number; characters: Array<{ name: string; score: number; issues: string[] }> };
@@ -45,10 +45,14 @@ export default function QualityCheckPanel({
         {qualityResult ? (
           <>
             <div className="flex items-center gap-2 mb-2">
-              <span className={`text-xl font-bold ${
-                qualityResult.overall_score >= 80 ? "text-green-600" :
-                qualityResult.overall_score >= 60 ? "text-yellow-600" : "text-red-600"
-              }`}>{qualityResult.overall_score}%</span>
+              {qualityResult.overall_score === null ? (
+                <span className="text-sm font-semibold text-gray-400">QA unavailable — try again</span>
+              ) : (
+                <span className={`text-xl font-bold ${
+                  qualityResult.overall_score >= 80 ? "text-green-600" :
+                  qualityResult.overall_score >= 60 ? "text-yellow-600" : "text-red-600"
+                }`}>{qualityResult.overall_score}%</span>
+              )}
             </div>
             <div className="space-y-1.5 mb-2">
               {[
