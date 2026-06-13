@@ -37,7 +37,7 @@ COPY --from=frontend-build /app/frontend/.next/static ./frontend/.next/static/
 COPY --from=frontend-build /app/frontend/public ./frontend/public/
 
 # Ensure data dirs exist
-RUN mkdir -p data/generated data/sample_books
+RUN mkdir -p data/generated
 
 # Start script: run both FastAPI and Next.js
 COPY start.sh .

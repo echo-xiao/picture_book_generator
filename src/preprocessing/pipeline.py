@@ -9,8 +9,8 @@ Layer 5: TextTiling segmentation (on cleaned text)
 Layer 6: LLM annotation → characters_in_scene, sentiment, key events per segment
 
 Usage:
-    python scripts/preprocess_book.py --input data/sample_books/a_tale_of_two_cities.txt
-    python scripts/preprocess_book.py --input data/sample_books/a_tale_of_two_cities.txt --skip-sheets
+    python scripts/preprocess_book.py --input path/to/book.txt
+    python scripts/preprocess_book.py --input path/to/book.txt --skip-sheets
 """
 
 from __future__ import annotations

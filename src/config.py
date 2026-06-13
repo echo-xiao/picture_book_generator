@@ -7,7 +7,6 @@ load_dotenv()
 BASE_DIR = Path(__file__).parent.parent
 DATA_DIR = BASE_DIR / "data"
 GENERATED_DIR = DATA_DIR / "generated"
-SAMPLE_BOOKS_DIR = DATA_DIR / "sample_books"
 
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 

@@ -6,7 +6,6 @@ frontend/out
 __pycache__
 *.pyc
 data/generated/*
-data/sample_books/*.txt
 .env
 .env.*
 *.egg-info
