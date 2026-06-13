@@ -666,6 +666,12 @@ async def check_segment_quality(
     if not target:
         raise HTTPException(status_code=404, detail=f"Segment {seg_id} not found.")
 
+    # Don't QA an image that's being replaced right now — the regen moves it to
+    # history and writes a new one, so a check here would score the old image
+    # and overwrite the fresh quality cache.
+    if (book_id, "segment", seg_id) in _active_regens or book_generation_active(book_id):
+        raise HTTPException(status_code=409, detail="This page is regenerating — check quality when it finishes.")
+
     ch_idx = target.get("chapter_idx", 0)
     page_num = segment_page_num(segments, ch_idx, seg_id)
 
@@ -1020,6 +1026,8 @@ async def check_special_page_quality(
 
     if page_type not in SPECIAL_TYPES:
         raise HTTPException(status_code=400, detail=f"Unknown special page type '{page_type}'.")
+    if (book_id, "special", f"{page_type}:{chapter}") in _active_regens:
+        raise HTTPException(status_code=409, detail="This page is regenerating — check quality when it finishes.")
     base = special_file_base(page_type, chapter) or ""
     special_dir = GENERATED_DIR / book_id / "special"
     ill_path = ""

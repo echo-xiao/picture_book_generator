@@ -220,6 +220,15 @@ def _cascade_character_rename(book_id: str, old_name: str, new_name: str) -> Non
             except OSError as e:
                 logger.warning("Sheet rename failed for %s: %s", f.name, e)
 
+    # 5) Chapter consistency summaries embed the old name in their per-page /
+    # per-character scores — drop every cached one so they recompute.
+    chapters_root = GENERATED_DIR / book_id / "chapters"
+    if chapters_root.exists():
+        for ch_dir in chapters_root.glob("ch*"):
+            try:
+                (ch_dir / "consistency.json").unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 @router.put("/api/book/{book_id}/preprocess/characters/{char_name}")
@@ -600,19 +609,31 @@ async def restore_special_page_version(
     special_dir.mkdir(parents=True, exist_ok=True)
     tmp_restore = special_dir / f".restore_tmp_{base}{restored.suffix}"
     shutil.copy2(restored, tmp_restore)
+    quality_file = special_dir / "quality" / f"{base}_quality.json"
     try:
         ts = int(_time.time())
         history_dir.mkdir(parents=True, exist_ok=True)
-        while any((history_dir / f"{base}_{ts}{sfx}").exists() for sfx in (".png", ".jpg")):
+        while any((history_dir / f"{base}_{ts}{sfx}").exists()
+                  for sfx in (".png", ".jpg", "_quality.json")):
             ts += 1
         for ext in (".png", ".jpg"):
             current = special_dir / f"{base}{ext}"
             if current.exists():
                 current.rename(history_dir / f"{base}_{ts}{ext}")
+        # Archive the current quality verdict too, or it would mislabel the
+        # restored image (segment restore does the same).
+        if quality_file.exists():
+            quality_file.rename(history_dir / f"{base}_{ts}_quality.json")
         new_current = special_dir / f"{base}{restored.suffix}"
         tmp_restore.rename(new_current)
     finally:
         tmp_restore.unlink(missing_ok=True)
+
+    # Restore the restored version's own verdict if it was archived.
+    hist_quality = history_dir / f"{base}_{version}_quality.json"
+    if hist_quality.exists():
+        quality_file.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(hist_quality, quality_file)
 
     return {
         "status": "restored",
