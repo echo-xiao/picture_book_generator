@@ -22,6 +22,9 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import random
+import re
+import time
 
 from src.config import (
     GCP_LOCATION,
@@ -106,6 +109,54 @@ def friendly_gen_error(errors: list[str]) -> str | None:
     if errors:
         return errors[-1][:300]
     return None
+
+
+_TRANSIENT_MARKERS = ("rate limit", "429", "resource_exhausted", "resource exhausted", "503", "unavailable")
+
+
+def _is_free_tier_zero_quota(err_str: str) -> bool:
+    low = err_str.lower()
+    return "free_tier" in low or "freetier" in low
+
+
+def _retry_after_seconds(err_str: str) -> float | None:
+    """Honour the server's stated wait ('Please retry in 48.8s' / retryDelay '48s')."""
+    m = (re.search(r"retry in ([\d.]+)\s*s", err_str, re.I)
+         or re.search(r"retrydelay['\"]?\s*[:=]\s*['\"]?(\d+)\s*s", err_str, re.I))
+    try:
+        return float(m.group(1)) if m else None
+    except (TypeError, ValueError):
+        return None
+
+
+def call_gemini_with_backoff(fn, *, max_retries: int = 3, base: float = 5.0, label: str = ""):
+    """The SINGLE retry policy for every Gemini call. `fn()` performs one attempt.
+
+    - free-tier / zero-quota 429 → fail immediately (it can NEVER succeed, so
+      don't burn 15s of sleeps before reporting it — the killer case on a
+      public BYOK deployment).
+    - transient 429 / 503 / RESOURCE_EXHAUSTED → honour the server's Retry-After
+      when present, else exponential backoff with jitter.
+    - anything else → raise straight through.
+    """
+    last: Exception | None = None
+    for attempt in range(max(1, max_retries)):
+        try:
+            return fn()
+        except Exception as e:
+            last = e
+            es = str(e)
+            if _is_free_tier_zero_quota(es):
+                raise  # never succeeds — fail fast, no sleep
+            transient = any(k in es.lower() for k in _TRANSIENT_MARKERS)
+            if not transient or attempt >= max_retries - 1:
+                raise
+            wait = _retry_after_seconds(es) or (base * (2 ** attempt) + random.uniform(0, 3))
+            logger.warning("Gemini%s transient error, retry %d/%d in %.1fs",
+                           f" [{label}]" if label else "", attempt + 1, max_retries, wait)
+            time.sleep(wait)
+    if last:
+        raise last
 
 
 def make_genai_client():

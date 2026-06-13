@@ -8,7 +8,6 @@ Usage:
 
 import json
 import logging
-import time
 from typing import Any
 
 from src.config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_BACKEND
@@ -28,28 +27,20 @@ def _call_gemini(prompt: str, system: str = "", max_retries: int = 3) -> str:
     if system:
         config.system_instruction = system
 
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=prompt,
-                config=config,
-            )
-            if response.text is None:
-                raise ValueError("Gemini returned empty response (blocked or truncated)")
-            return response.text
-        except Exception as e:
-            error_str = str(e).lower()
-            if any(kw in error_str for kw in ["rate limit", "429", "resource exhausted", "503"]) and attempt < max_retries - 1:
-                wait = 2 ** (attempt + 1)
-                logger.warning("Gemini rate limit, retrying in %ds: %s", wait, e)
-                time.sleep(wait)
-                continue
-            if attempt < max_retries - 1:
-                logger.warning("Gemini error (attempt %d): %s", attempt + 1, e)
-                time.sleep(2)
-                continue
-            raise
+    from src.gemini_backend import call_gemini_with_backoff
+
+    def _attempt() -> str:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=config,
+        )
+        if response.text is None:
+            raise ValueError("Gemini returned empty response (blocked or truncated)")
+        return response.text
+
+    # Single shared retry policy (rate-limit/transient backoff, free-tier fast-fail).
+    return call_gemini_with_backoff(_attempt, max_retries=max_retries, base=2.0, label="text")
 
 
 def generate_json(prompt: str, system: str = "", max_retries: int = 3) -> dict[str, Any]:

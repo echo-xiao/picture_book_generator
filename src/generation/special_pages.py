@@ -10,7 +10,6 @@ as visual references to maintain style consistency.
 """
 
 import logging
-import time
 from pathlib import Path
 
 from google import genai
@@ -83,29 +82,28 @@ def _generate_image_with_refs(
     parts = _build_reference_parts(character_sheets, scene_sheet_path, style_ref_path)
     parts.append({"text": prompt})
 
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model=GEMINI_IMAGE_MODEL,
-                contents=parts,
-                config=genai.types.GenerateContentConfig(
-                    response_modalities=["TEXT", "IMAGE"],
-                    image_config=genai.types.ImageConfig(
-                        aspect_ratio="1:1",
-                    ),
-                ),
-            )
-            final_path = save_inline_image(response, save_path)
-            if final_path:
-                logger.info("Saved special page to %s", final_path)
-                return final_path
-        except Exception as e:
-            logger.warning("Special page attempt %d failed: %s", attempt + 1, e)
-            from src.gemini_backend import note_gen_failure
-            note_gen_failure(e)
-            if attempt < max_retries - 1:
-                time.sleep(2)
+    from src.gemini_backend import call_gemini_with_backoff, note_gen_failure
 
+    def _attempt() -> str:
+        response = client.models.generate_content(
+            model=GEMINI_IMAGE_MODEL,
+            contents=parts,
+            config=genai.types.GenerateContentConfig(
+                response_modalities=["TEXT", "IMAGE"],
+                image_config=genai.types.ImageConfig(aspect_ratio="1:1"),
+            ),
+        )
+        return save_inline_image(response, save_path)
+
+    try:
+        final_path = call_gemini_with_backoff(_attempt, max_retries=max_retries, label=save_path.name)
+    except Exception as e:
+        logger.warning("Special page generation failed: %s", e)
+        note_gen_failure(e)
+        return ""
+    if final_path:
+        logger.info("Saved special page to %s", final_path)
+        return final_path
     return ""
 
 

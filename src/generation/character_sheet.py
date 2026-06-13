@@ -13,7 +13,6 @@ to maintain character consistency.
 
 import logging
 import re
-import time
 from pathlib import Path
 
 from google import genai
@@ -214,25 +213,28 @@ RULES:
 Style: {style}
 Do NOT include: {NEGATIVE_PROMPT}"""
 
-    for attempt in range(2):
-        try:
-            response = client.models.generate_content(
-                model=GEMINI_IMAGE_MODEL,
-                contents=prompt,
-                config=genai.types.GenerateContentConfig(
-                    response_modalities=["TEXT", "IMAGE"],
-                    image_config=genai.types.ImageConfig(aspect_ratio="1:1"),
-                ),
-            )
-            final = save_inline_image(response, portrait_path)
-            if final:
-                logger.info("Portrait for '%s' saved to %s", name, final)
-                return final
-        except Exception as e:
-            logger.warning("Portrait attempt %d for '%s' failed: %s", attempt + 1, name, e)
-            if attempt == 0:
-                time.sleep(2)
+    from src.gemini_backend import call_gemini_with_backoff, note_gen_failure
 
+    def _attempt() -> str:
+        response = client.models.generate_content(
+            model=GEMINI_IMAGE_MODEL,
+            contents=prompt,
+            config=genai.types.GenerateContentConfig(
+                response_modalities=["TEXT", "IMAGE"],
+                image_config=genai.types.ImageConfig(aspect_ratio="1:1"),
+            ),
+        )
+        return save_inline_image(response, portrait_path)
+
+    try:
+        final = call_gemini_with_backoff(_attempt, max_retries=2, label=name)
+    except Exception as e:
+        logger.warning("Portrait generation for '%s' failed: %s", name, e)
+        note_gen_failure(e)
+        return ""
+    if final:
+        logger.info("Portrait for '%s' saved to %s", name, final)
+        return final
     return ""
 
 
@@ -312,25 +314,26 @@ def generate_character_sheets(
                     pass
             contents.append({"text": prompt})
 
-            for attempt in range(2):
-                try:
-                    response = client.models.generate_content(
-                        model=GEMINI_IMAGE_MODEL,
-                        contents=contents,
-                        config=genai.types.GenerateContentConfig(
-                            response_modalities=["TEXT", "IMAGE"],
-                            image_config=genai.types.ImageConfig(aspect_ratio="1:1"),
-                        ),
-                    )
-                    sheet_path = save_inline_image(response, save_path)
-                    if sheet_path:
-                        break
-                except Exception as e:
-                    logger.warning("Sheet attempt %d for '%s' failed: %s", attempt + 1, name, e)
-                    from src.gemini_backend import note_gen_failure
-                    note_gen_failure(e)
-                    if attempt == 0:
-                        time.sleep(2)
+            from src.gemini_backend import call_gemini_with_backoff, note_gen_failure
+
+            def _attempt() -> str:
+                response = client.models.generate_content(
+                    model=GEMINI_IMAGE_MODEL,
+                    contents=contents,
+                    config=genai.types.GenerateContentConfig(
+                        response_modalities=["TEXT", "IMAGE"],
+                        image_config=genai.types.ImageConfig(aspect_ratio="1:1"),
+                    ),
+                )
+                return save_inline_image(response, save_path)
+
+            try:
+                # Shared backoff: fails fast on a free-tier/zero-quota key
+                # instead of the old blind sleep(2).
+                sheet_path = call_gemini_with_backoff(_attempt, max_retries=2, label=name) or sheet_path
+            except Exception as e:
+                logger.warning("Sheet generation for '%s' failed: %s", name, e)
+                note_gen_failure(e)
 
         role = profile.get("role", "unknown")
         results.append({

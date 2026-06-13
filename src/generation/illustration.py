@@ -5,7 +5,6 @@ references for consistency — not just text prompts.
 """
 
 import logging
-import random
 import time
 from pathlib import Path
 
@@ -224,38 +223,29 @@ def _generate_single_page(
 
     contents = _build_reference_content(prompt_text, valid_sheets, style_ref_path, in_scene_names, scene_sheet_path)
 
-    for attempt in range(MAX_RETRIES):
-        try:
-            response = client.models.generate_content(
-                model=GEMINI_IMAGE_MODEL,
-                contents=contents,
-                config=genai.types.GenerateContentConfig(
-                    response_modalities=["TEXT", "IMAGE"],
-                    image_config=genai.types.ImageConfig(
-                        aspect_ratio="1:1",
-                    ),
-                ),
-            )
+    from src.gemini_backend import call_gemini_with_backoff, note_gen_failure
 
-            saved = _extract_image(response, save_path)
-            if saved:
-                return True, saved, prompt_text
-            return False, "", prompt_text
+    def _attempt() -> str:
+        response = client.models.generate_content(
+            model=GEMINI_IMAGE_MODEL,
+            contents=contents,
+            config=genai.types.GenerateContentConfig(
+                response_modalities=["TEXT", "IMAGE"],
+                image_config=genai.types.ImageConfig(aspect_ratio="1:1"),
+            ),
+        )
+        return _extract_image(response, save_path)
 
-        except Exception as e:
-            error_str = str(e).lower()
-            is_rate_limit = any(kw in error_str for kw in ["rate limit", "429", "resource exhausted"])
-            if is_rate_limit and attempt < MAX_RETRIES - 1:
-                wait = (2 ** attempt) * 5 + random.uniform(0, 3)
-                logger.warning("Rate limited on %s, retry %d/%d in %.1fs",
-                               save_path.name, attempt + 1, MAX_RETRIES, wait)
-                time.sleep(wait)
-                continue
-            logger.warning("Generation failed for %s: %s", save_path.name, e)
-            from src.gemini_backend import note_gen_failure
-            note_gen_failure(e)
-            return False, "", prompt_text
+    try:
+        saved = call_gemini_with_backoff(_attempt, max_retries=MAX_RETRIES, label=save_path.name)
+    except Exception as e:
+        # Shared backoff already failed fast on a free-tier/zero-quota key.
+        logger.warning("Generation failed for %s: %s", save_path.name, e)
+        note_gen_failure(e)
+        return False, "", prompt_text
 
+    if saved:
+        return True, saved, prompt_text
     return False, "", prompt_text
 
 
