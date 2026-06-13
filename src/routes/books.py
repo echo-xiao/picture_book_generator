@@ -363,10 +363,50 @@ class FeedbackRequest(BaseModel):
     context: str | None = None
 
 
+def _email_feedback_to_owner(msg: str, email: str | None, context: str | None) -> None:
+    """Best-effort: email a feedback note to the project owner's inbox.
+
+    Gated on SMTP env vars — when they're unset (e.g. local dev, or before the
+    owner adds a Gmail App Password) this is a no-op and the note still lives in
+    MongoDB/the file fallback. Never raises: a mail failure must not fail the
+    user's submission. Set SMTP_USER + SMTP_PASSWORD (a Gmail App Password) and
+    optionally FEEDBACK_EMAIL_TO to activate; default host smtp.gmail.com:587.
+    """
+    user = os.getenv("SMTP_USER", "").strip()
+    password = os.getenv("SMTP_PASSWORD", "").strip()
+    if not (user and password):
+        return  # not configured — note is already persisted elsewhere
+    to_addr = os.getenv("FEEDBACK_EMAIL_TO", "").strip() or user
+    host = os.getenv("SMTP_HOST", "smtp.gmail.com").strip()
+    port = int(os.getenv("SMTP_PORT", "587"))
+    try:
+        import smtplib
+        from email.message import EmailMessage
+        m = EmailMessage()
+        m["Subject"] = "📖 New Story Sprout feedback"
+        m["From"] = user
+        m["To"] = to_addr
+        if email:
+            m["Reply-To"] = email  # owner can reply straight to the user
+        m.set_content(
+            f"Message:\n{msg}\n\n"
+            f"From: {email or '(no email given)'}\n"
+            f"Page: {context or '(unknown)'}\n"
+        )
+        with smtplib.SMTP(host, port, timeout=15) as s:
+            s.starttls()
+            s.login(user, password)
+            s.send_message(m)
+        logger.info("Feedback emailed to owner")
+    except Exception as e:
+        logger.warning("Feedback email failed (note still saved): %s", e)
+
+
 @router.post("/api/feedback")
-async def submit_feedback(req: FeedbackRequest) -> dict[str, str]:
+async def submit_feedback(req: FeedbackRequest, background_tasks: BackgroundTasks) -> dict[str, str]:
     """Collect a user feedback note. No Gemini cost, so no BYOK gate; bounded
-    in size to limit spam. Falls back to a local file if MongoDB is down."""
+    in size to limit spam. Persists to MongoDB (file fallback) and, when SMTP is
+    configured, emails the owner — both best-effort so the user always succeeds."""
     msg = (req.message or "").strip()
     if not msg:
         raise HTTPException(status_code=400, detail="Feedback message is required.")
@@ -385,6 +425,8 @@ async def submit_feedback(req: FeedbackRequest) -> dict[str, str]:
             json.dumps({"message": msg, "email": email, "context": context}, ensure_ascii=False),
             encoding="utf-8",
         )
+    # Push to the owner's inbox after responding (no-op until SMTP is set).
+    background_tasks.add_task(_email_feedback_to_owner, msg, email, context)
     return {"status": "received"}
 
 
