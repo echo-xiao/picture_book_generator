@@ -41,7 +41,10 @@ export async function getConfig() {
 }
 
 export async function listPreprocessedBooks() {
-  const { data } = await api.get("/books/preprocessed");
+  // Soft per-user isolation: the email the user created books with decides which
+  // are theirs; everyone also sees the public samples.
+  const email = typeof window !== "undefined" ? localStorage.getItem("pbg_email") || "" : "";
+  const { data } = await api.get("/books/preprocessed", { params: email ? { email } : {} });
   return data;
 }
 

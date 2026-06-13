@@ -602,6 +602,15 @@ async def start_generation(
     if request.config.email:
         _save_user_info(book_id, request.config.email, user_api_key)
 
+    # Already fully preprocessed (same text → same content-hash id)? Reuse it
+    # instead of re-running the whole pipeline — saves the LLM cost and keeps any
+    # editor changes. The owner was just recorded above, so it shows in their
+    # library. (A failed/partial run still re-runs.)
+    rs = _read_json_guarded(_run_status_path(book_id))
+    analysis_exists = (GENERATED_DIR / book_id / "preprocess" / "analysis.json").exists()
+    if analysis_exists and not _preprocess_running(book_id) and (rs is None or rs.get("status") == "complete"):
+        return {"book_id": book_id, "status": "exists"}
+
     # No await between the membership check above and this claim, so two
     # concurrent kickoffs can't both pass; _run_preprocess releases in finally.
     _active_preprocesses.add(book_id)
@@ -780,18 +789,31 @@ def _book_status(book_id: str, generated_chapters: int) -> str:
     return "processing"
 
 
+def _book_owner(book_id: str) -> str:
+    """The email that created this book (from user.json), lowercased, or ''."""
+    info = _read_json_guarded(GENERATED_DIR / book_id / "preprocess" / "user.json")
+    return (info.get("email") or "").strip().lower() if isinstance(info, dict) else ""
+
+
+def _sample_book_ids() -> set[str]:
+    """Book ids everyone can see (public samples). Configurable via env."""
+    return {s.strip() for s in os.getenv("SAMPLE_BOOK_IDS", "the_great_gatsby").split(",") if s.strip()}
+
+
 @router.get("/api/books/preprocessed")
-async def list_preprocessed_books() -> list[dict[str, Any]]:
-    """List all books that have preprocess data.
+async def list_preprocessed_books(email: str | None = None) -> list[dict[str, Any]]:
+    """Books this viewer may see: their OWN (matched by the email they used to
+    create them) plus the public samples. Soft isolation — email is identity,
+    not auth — so a visitor without an email sees only the samples.
 
     UNION of MongoDB and the disk scan, deduped by book_id (Mongo record wins
-    when both exist). The old "disk only when Mongo returned ZERO books"
-    fallback made any book whose Mongo doc was never created (outage at save
-    time) permanently invisible while other books existed in Mongo.
+    when both exist).
     """
     from src.core.db import list_preprocess_books
     from src.routes.helpers import _load_json
 
+    samples = _sample_book_ids()
+    viewer = (email or "").strip().lower()
     books_by_id: dict[str, dict[str, Any]] = {}
 
     try:
@@ -851,7 +873,14 @@ async def list_preprocessed_books() -> list[dict[str, Any]]:
             except Exception as e:
                 logger.warning("Skipping unreadable book dir %s: %s", d, e)
 
-    return list(books_by_id.values())
+    # Isolation: keep the public samples + this viewer's own books.
+    out = []
+    for bid, rec in books_by_id.items():
+        is_sample = bid in samples
+        rec["is_sample"] = is_sample
+        if is_sample or (viewer and _book_owner(bid) == viewer):
+            out.append(rec)
+    return out
 
 
 @router.delete("/api/book/{book_id}")

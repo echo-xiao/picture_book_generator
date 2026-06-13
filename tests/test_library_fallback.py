@@ -29,14 +29,16 @@ def test_list_preprocess_books_swallows_midflight_errors(monkeypatch):
 
 
 def test_library_endpoint_falls_back_to_disk(client, monkeypatch, tmp_path):
-    """Mongo path empty → the endpoint must serve books found on disk."""
+    """Mongo path empty → the endpoint must serve books found on disk (for the
+    owner, under the per-user isolation filter)."""
     monkeypatch.setattr("src.core.db.list_preprocess_books", lambda: [])
     monkeypatch.setattr("src.routes.books.GENERATED_DIR", tmp_path)
     pre = tmp_path / "somebook" / "preprocess"
     pre.mkdir(parents=True)
     (pre / "meta.json").write_text(json.dumps({"title": "Some Book", "num_chapters": 3}))
+    (pre / "user.json").write_text(json.dumps({"email": "owner@x.com"}))
 
-    resp = client.get("/api/books/preprocessed")
+    resp = client.get("/api/books/preprocessed", params={"email": "owner@x.com"})
     assert resp.status_code == 200
     books = resp.json()
     assert len(books) == 1
