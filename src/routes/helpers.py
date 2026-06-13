@@ -102,14 +102,44 @@ def _get_lock(key: str) -> threading.Lock:
         return _file_locks[key]
 
 
+def heal_if_local_fresher(book_id: str, filename: str, mongo_updated: str | None):
+    """Freshness heal, shared by EVERY preprocess read (web + the chapter
+    subprocess) so MongoDB stays the single authority.
+
+    _save_json dual-writes Mongo + file best-effort; a Mongo write that fails
+    during a save leaves the doc stale but the file fresh. When the local file
+    is clearly newer than the Mongo doc, return its data AND repair the doc —
+    so the next Mongo-first read is already correct. Returns None when the doc
+    is current or there is no local file (caller keeps the Mongo value).
+    """
+    path = GENERATED_DIR / book_id / "preprocess" / filename
+    if not (mongo_updated and path.exists()):
+        return None
+    try:
+        from datetime import datetime
+        doc_ts = datetime.fromisoformat(mongo_updated).timestamp()
+        # 2s epsilon: a normal dual write lands in both stores within moments —
+        # only a clearly newer file indicates divergence.
+        if path.stat().st_mtime <= doc_ts + 2:
+            return None
+        file_data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.debug("Freshness check failed for %s/%s: %s", book_id, filename, e)
+        return None
+    try:
+        from src.core.db import save_preprocess_file
+        save_preprocess_file(book_id, filename, file_data)
+        logger.info("Healed stale Mongo doc %s/%s from newer local file", book_id, filename)
+    except Exception:
+        pass  # heal is best-effort; the fresh file still wins
+    return file_data
+
+
 def _load_json(book_id: str, filename: str) -> dict | list | None:
     """Load preprocess data from MongoDB first, fall back to local JSON file.
 
-    Freshness guard: _save_json writes BOTH stores best-effort, so a Mongo
-    blip during a save leaves the file updated but the doc stale — and
-    Mongo-first reads then shadowed the fresh file forever. When the local
-    file is clearly newer than the doc, the file wins and the doc is healed
-    from it (best-effort), closing the divergence instead of perpetuating it.
+    Mongo is the authority; heal_if_local_fresher repairs a doc left stale by a
+    failed Mongo write so Mongo-first reads never shadow a fresher file.
     """
     path = GENERATED_DIR / book_id / "preprocess" / filename
 
@@ -124,24 +154,8 @@ def _load_json(book_id: str, filename: str) -> dict | list | None:
         logger.debug("MongoDB load failed for %s/%s: %s", book_id, filename, e)
 
     if mongo_data is not None:
-        try:
-            if mongo_updated and path.exists():
-                from datetime import datetime
-                doc_ts = datetime.fromisoformat(mongo_updated).timestamp()
-                # 2s epsilon: a normal dual write lands in both stores within
-                # moments — only a clearly newer file indicates divergence.
-                if path.stat().st_mtime > doc_ts + 2:
-                    file_data = json.loads(path.read_text(encoding="utf-8"))
-                    try:
-                        from src.core.db import save_preprocess_file
-                        save_preprocess_file(book_id, filename, file_data)
-                        logger.info("Healed stale Mongo doc %s/%s from newer local file", book_id, filename)
-                    except Exception:
-                        pass  # heal is best-effort; the fresh file still wins below
-                    return file_data
-        except Exception as e:
-            logger.debug("Freshness check failed for %s/%s: %s", book_id, filename, e)
-        return mongo_data
+        healed = heal_if_local_fresher(book_id, filename, mongo_updated)
+        return healed if healed is not None else mongo_data
 
     # Fallback to local file
     if not path.exists():

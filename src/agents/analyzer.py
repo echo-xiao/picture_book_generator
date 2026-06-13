@@ -71,6 +71,23 @@ class AnalyzerAgent:
             if path.exists():
                 data[name] = json.loads(path.read_text(encoding="utf-8"))
 
+        # 4) Same freshness heal the web read uses, so the subprocess and the
+        #    editor resolve to ONE MongoDB-authoritative version. A Mongo write
+        #    that failed during an edit left the doc stale; without this the
+        #    generator drew from pre-edit data while the editor showed the edit.
+        from src.routes.helpers import heal_if_local_fresher
+        try:
+            from src.core.db import load_preprocess_file_with_meta
+            for name in names:
+                meta = load_preprocess_file_with_meta(self.book_id, f"{name}.json")
+                if meta is None:
+                    continue
+                fresher = heal_if_local_fresher(self.book_id, f"{name}.json", meta[1])
+                if fresher is not None:
+                    data[name] = fresher
+        except Exception as e:
+            logger.debug("load_preprocess freshness pass skipped: %s", e)
+
         if not data:
             # This is a library method (also imported into the server process),
             # so raise instead of sys.exit(1) — a bare exit would kill the whole
