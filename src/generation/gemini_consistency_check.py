@@ -69,8 +69,14 @@ EXPECTED story text embedded in image: "{expected_text[:300]}"
 
 Check ALL of the following:
 
-1. CHARACTER CONSISTENCY: For each character, compare against their REFERENCE SHEET.
-   - Hair color/style match? Clothing match? Distinctive features present?
+1. CHARACTER CONSISTENCY: For EACH character, compare CAREFULLY against their REFERENCE SHEET.
+   - In "issues", first state the sheet's hair color + outfit colors, then the image's — e.g.
+     "sheet: purple dress; image: white coat".
+   - Be STRICT and CRITICAL. A 100 requires hair color, hairstyle, outfit, AND outfit COLORS to
+     match the sheet EXACTLY. Recolored/restyled clothing, wrong hair color, or missing distinctive
+     accessories must score WELL BELOW 100 (a wrong outfit color alone caps the character at ~60).
+   - Do NOT give a high score just because the character is "close" or "recognizable" — list every
+     difference you see. Default to deducting when unsure.
 
 2. SPELLING ERRORS: Read ALL text visible in the image (speech bubbles, banners, scrolls, signs).
    - List every misspelled word you find. Compare against the expected text.

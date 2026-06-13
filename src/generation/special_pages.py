@@ -50,7 +50,11 @@ def _build_reference_parts(
                 continue
             img = _load_image_part(path)
             if img:
-                parts.append({"text": f"[CHARACTER: {name}] — draw this character matching this reference exactly"})
+                parts.append({"text": (
+                    f"[CHARACTER REFERENCE: {name}] — COPY this character EXACTLY: same hair color, "
+                    f"same hairstyle, same outfit and its EXACT colors, same accessories. Do NOT "
+                    f"recolor or restyle the clothing. This sheet is the ground truth for {name}."
+                )})
                 parts.append(img)
 
     # Scene sheet
@@ -160,6 +164,11 @@ REQUIREMENTS:
 - Use a warm, eye-catching color scheme that makes kids want to pick up the book
 - Include a hint of the story's setting in the background
 - The composition should be balanced and professional, like a real published book cover
+
+CHARACTER FIDELITY (critical — match the reference sheets above):
+- Draw each character with the EXACT hair color, outfit, and OUTFIT COLORS shown on their reference sheet.
+- Do NOT recolor or restyle their clothes. Purple dress stays purple; cream suit stays cream.
+- Keep each character's distinctive accessories (hats, glasses, etc.) from their sheet.
 
 STRICT TEXT RULES:
 - The ONLY text in this image should be the title "{title}" and subtitle "{subtitle}".
