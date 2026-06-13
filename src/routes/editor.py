@@ -1039,7 +1039,7 @@ async def simplify_segment_text(
         "key_characters": target.get("characters_in_scene", []),
         "scene_summary": target.get("scene_summary", ""),
     }
-    result = await run_in_threadpool(simplify_text, [scene], "4-6")
+    result = await run_in_threadpool(simplify_text, [scene])
     simplified = result[0].get("page_text", "") if result else ""
     scene_direction = result[0].get("scene_direction", "") if result else ""
 

@@ -45,28 +45,4 @@ DEFAULT_STYLE = (
 )
 NEGATIVE_PROMPT = "scary, violent, dark, photorealistic, 3D render, adult content, blood, weapons"
 
-# Age presets
-AGE_PRESETS = {
-    "2-4": {
-        "max_words_per_page": 25,
-        "max_sentence_length": 8,
-        "flesch_kincaid_max": 2.0,
-        "vocabulary_level": "basic",
-        "description": "Toddler: very simple words, short sentences, repetition",
-    },
-    "4-6": {
-        "max_words_per_page": 50,
-        "max_sentence_length": 12,
-        "flesch_kincaid_max": 4.0,
-        "vocabulary_level": "intermediate",
-        "description": "Preschool: simple sentences, basic story structure",
-    },
-    "6-8": {
-        "max_words_per_page": 80,
-        "max_sentence_length": 15,
-        "flesch_kincaid_max": 6.0,
-        "vocabulary_level": "advanced",
-        "description": "Early reader: compound sentences, richer vocabulary",
-    },
-}
 

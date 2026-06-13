@@ -41,13 +41,12 @@ TEXT_SYNC_FILENAME = "text_sync.json"
 class PipelineContext:
     """Mutable state shared across the ADK pipeline stages."""
 
-    def __init__(self, book_id, data, chapter_idx, page_filter, age_group, self_correct,
+    def __init__(self, book_id, data, chapter_idx, page_filter, self_correct,
                  defer_text_sync: bool = False):
         self.book_id = book_id
         self.data = data
         self.chapter_idx = chapter_idx
         self.page_filter = page_filter
-        self.age_group = age_group
         self.self_correct = self_correct
         self.defer_text_sync = defer_text_sync
 
@@ -171,7 +170,7 @@ class WriterStage(_Stage):
             return
 
         _update_progress(c.book_id, c.chapter_idx, agent="writer", current_step="Simplifying text for kids...", progress=30)
-        writer = WriterAgent(age_group=c.age_group)
+        writer = WriterAgent()
         chapter_char_names = {s["character_name"] for s in c.character_sheets}
         chapter_chars = [p for p in c.profiles if p.get("name") in chapter_char_names]
 
@@ -186,7 +185,7 @@ class WriterStage(_Stage):
             for s in c.scenes if s.get("simplified_text")
         ]
         log_event(c.book_id, c.chapter_idx, "writer", "simplify_text",
-                  f"Simplifying {len(to_write)} scenes for age {c.age_group}"
+                  f"Simplifying {len(to_write)} scenes"
                   + (f" ({len(kept)} pages keep their existing text)" if kept else ""))
         fresh = writer.simplify(to_write, characters=chapter_chars,
                                 character_sheets=c.character_sheets) if to_write else []
@@ -420,10 +419,10 @@ async def _run_async(ctx: PipelineContext) -> None:
 
 
 def run_adk_pipeline(book_id: str, data: dict, chapter_idx: int, page_filter: list[int] | None = None,
-                     age_group: str = "4-6", self_correct: bool = False,
+                     self_correct: bool = False,
                      defer_text_sync: bool = False) -> dict | None:
     """Run the book-generation pipeline via the ADK SequentialAgent. Returns chapter_data."""
-    ctx = PipelineContext(book_id, data, chapter_idx, page_filter, age_group, self_correct,
+    ctx = PipelineContext(book_id, data, chapter_idx, page_filter, self_correct,
                           defer_text_sync=defer_text_sync)
     asyncio.run(_run_async(ctx))
     return ctx.chapter_data

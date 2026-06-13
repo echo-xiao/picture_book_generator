@@ -39,7 +39,7 @@ def writer_stage(monkeypatch):
 
     simplify_calls: list[list[dict]] = []
 
-    def fake_simplify(scenes, age_group, original_text="", language="en",
+    def fake_simplify(scenes, original_text="", language="en",
                       characters=None, character_sheets=None):
         simplify_calls.append(scenes)
         return [{**s, "page_text": f"LLM TEXT p{s['page_number']}"} for s in scenes]

@@ -56,7 +56,6 @@ def export_pdf(
     pages: list[dict],
     book_title: str,
     output_path: str,
-    cover_image: str = "",
     special_dir: str = "",
 ) -> str:
     """Export the picture book as a PDF.
@@ -70,7 +69,6 @@ def export_pdf(
         pages: List of page dicts with 'image_path' and 'text'.
         book_title: Title for the PDF.
         output_path: Where to save the PDF.
-        cover_image: Override book cover image path.
         special_dir: Directory containing special page images.
     """
     output = Path(output_path)
@@ -89,7 +87,7 @@ def export_pdf(
     special = Path(special_dir)
 
     # 1. Book cover
-    book_cover = cover_image or _find_image(special, "book_cover")
+    book_cover = _find_image(special, "book_cover")
     if book_cover:
         _draw_full_image_page(c, book_cover, width, height)
 

@@ -43,7 +43,7 @@ def test_concurrent_text_edit_survives_regen(client, monkeypatch, store):
     """An edit to another FIELD that lands during the simplify call must not
     be reverted by the regen's write-back."""
 
-    def slow_simplify(scenes, age_group):
+    def slow_simplify(scenes):
         analysis = store["load"]("b", "analysis.json")
         analysis["segments"][0]["text"] = "EDITED DURING LLM CALL"
         store["save"]("b", "analysis.json", analysis)
@@ -64,7 +64,7 @@ def test_user_text_typed_mid_regen_wins(client, monkeypatch, store):
     """If the user fills in simplified_text while the LLM runs, their version
     must be kept — not overwritten by the LLM output."""
 
-    def slow_simplify(scenes, age_group):
+    def slow_simplify(scenes):
         analysis = store["load"]("b", "analysis.json")
         analysis["segments"][0]["simplified_text"] = "USER TYPED THIS"
         store["save"]("b", "analysis.json", analysis)

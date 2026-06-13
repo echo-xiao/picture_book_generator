@@ -38,7 +38,6 @@ def generate_chapter(
     data: dict,
     chapter_idx: int,
     page_filter: list[int] | None = None,
-    age_group: str = "4-6",
     self_correct: bool = False,
     defer_text_sync: bool = False,
 ) -> dict | None:
@@ -50,7 +49,7 @@ def generate_chapter(
     from src.agents.adk_pipeline import run_adk_pipeline
     return run_adk_pipeline(
         book_id, data, chapter_idx,
-        page_filter=page_filter, age_group=age_group, self_correct=self_correct,
+        page_filter=page_filter, self_correct=self_correct,
         defer_text_sync=defer_text_sync,
     )
 
@@ -106,7 +105,6 @@ def main():
     parser.add_argument("--chapter", type=str, default=None,
                         help="Chapter index (0-based). Comma-separated: 0,4")
     parser.add_argument("--pages", type=str, default=None, help="Comma-separated page numbers")
-    parser.add_argument("--age", type=str, default="4-6", help="Target age group")
     parser.add_argument("--special-only", action="store_true", help="Only generate special pages")
     parser.add_argument("--cover-only", action="store_true", help="Only generate book cover")
     parser.add_argument("--pdf-only", action="store_true", help="Only rebuild PDF")
@@ -166,7 +164,7 @@ def main():
     page_filter = [int(p.strip()) for p in args.pages.split(",")] if args.pages else None
 
     for ch_idx in chapter_indices:
-        generate_chapter(args.book, data, ch_idx, page_filter=page_filter, age_group=args.age,
+        generate_chapter(args.book, data, ch_idx, page_filter=page_filter,
                          self_correct=args.self_correct, defer_text_sync=args.defer_text_sync)
 
     # Rebuild the PDF from ALL generated chapters, not just the one(s) just

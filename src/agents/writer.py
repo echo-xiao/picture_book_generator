@@ -17,8 +17,7 @@ logger = logging.getLogger(__name__)
 class WriterAgent:
     """Rewrites adult literature into age-appropriate picture book text."""
 
-    def __init__(self, age_group: str = "4-6", language: str = "en"):
-        self.age_group = age_group
+    def __init__(self, language: str = "en"):
         self.language = language
 
     def simplify(
@@ -42,10 +41,10 @@ class WriterAgent:
         """
         from src.generation.text_simplifier import simplify_text
 
-        print(f"\n[Writer Agent] Simplifying {len(scenes)} pages (age {self.age_group})...")
+        print(f"\n[Writer Agent] Simplifying {len(scenes)} pages...")
         t0 = time.time()
         simplified = simplify_text(
-            scenes, self.age_group,
+            scenes,
             language=self.language,
             characters=characters,
             character_sheets=character_sheets,

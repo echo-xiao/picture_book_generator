@@ -274,7 +274,7 @@ async def regenerate_segment_illustration(
                 "key_characters": target.get("characters_in_scene", []),
                 "scene_summary": target.get("scene_summary", ""),
             }
-            result = await run_in_threadpool(simplify_text, [scene], "4-6")
+            result = await run_in_threadpool(simplify_text, [scene])
             if result:
                 simplified_text = result[0].get("page_text", "")
                 scene_direction = result[0].get("scene_direction", "")

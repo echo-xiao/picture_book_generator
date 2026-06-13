@@ -12,7 +12,6 @@ creatively rewrite selected scenes into picture book format with:
 import json
 import logging
 
-from src.config import AGE_PRESETS
 from src.llm_client import generate_json
 
 logger = logging.getLogger(__name__)
@@ -36,10 +35,8 @@ children BEG to hear again and again, and that parents love reading aloud.
 - EMOTIONAL CONNECTION: Characters kids care about and root for
 - CUMULATIVE patterns: Building layers (like "The House That Jack Built")
 
-## Age-Specific Guidelines
-- Ages 2-4: 50-100 unique words, strong rhythm, repetitive refrains
-- Ages 4-6: 200-400 words, simple sentences, predictable story patterns
-- Ages 6-8: 400-800 words, longer sentences, character development, cause/effect
+## Target Audience (ages 4-6)
+- 200-400 words per chapter, simple sentences, predictable story patterns
 
 ## Visual Storytelling
 - Text and illustrations work together — don't describe what the picture shows
@@ -53,11 +50,11 @@ NEVER write:
 """
 
 REWRITE_PROMPT = """\
-Rewrite this text into {num_pages} page(s) of a children's picture book for ages {age_group}.
+Rewrite this text into {num_pages} page(s) of a children's picture book for ages 4-6.
 
 ## Writing Rules
 - Language: {language_instruction}
-- Each page: 1-3 sentences (max {max_words} words per page)
+- Each page: 1-3 sentences (max 50 words per page)
 - Write with RHYTHM — sentences should feel musical when read aloud
 - Use repetition children can join in: "Up, up, up they went. Higher and higher and higher."
 - Add sound words: Creak! Whoosh! Tap-tap-tap! Splat!
@@ -94,21 +91,16 @@ scene_direction tips:
 
 def simplify_text(
     scenes: list[dict],
-    age_group: str,
     original_text: str = "",
     language: str = "en",
     characters: list[dict] | None = None,
     character_sheets: list[dict] | None = None,
 ) -> list[dict]:
-    """Rewrite scenes into picture book text using LLM.
+    """Rewrite scenes into picture book text (target: ages 4-6) using LLM.
 
     Each scene's original_text is passed directly — no separate book context needed.
     character_sheets provides visual identity info for scene_direction.
     """
-    if age_group not in AGE_PRESETS:
-        age_group = "4-6"
-    preset = AGE_PRESETS[age_group]
-
     # Normalize scenes
     normalized = []
     for s in scenes:
@@ -133,7 +125,7 @@ def simplify_text(
                 scene = {**scene, "previous_page_text": prev_text}
             # Pass character_sheets through — omitting it dropped every VISUAL:
             # line from the per-page prompt in real (multi-page) generation.
-            result = simplify_text([scene], age_group, original_text, language, characters, character_sheets)
+            result = simplify_text([scene], original_text, language, characters, character_sheets)
             if result:
                 # Keep the scene's real page number — sequential renumbering
                 # breaks partial runs (e.g. --pages 13,29 became pages 4,5)
@@ -194,9 +186,7 @@ def simplify_text(
 
     prompt = REWRITE_PROMPT.format(
         num_pages=len(scenes),
-        age_group=age_group,
         language_instruction=language_instruction,
-        max_words=preset["max_words_per_page"],
         scenes_json=json.dumps(scenes_data, indent=2, default=str, ensure_ascii=False),
         characters_info=chars_info,
     )
@@ -227,5 +217,5 @@ def simplify_text(
             "word_count": len(page_text.split()),
         })
 
-    logger.info("Rewrote %d pages for age group %s", len(output), age_group)
+    logger.info("Rewrote %d pages", len(output))
     return output

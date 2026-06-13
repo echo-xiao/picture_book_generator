@@ -41,7 +41,7 @@ def test_concurrent_edit_survives_simplify(client, monkeypatch, store):
     """While simplify's LLM call runs, another writer changes the segment's
     text. The simplify write-back must keep that edit."""
 
-    def slow_simplify(scenes, age_group):
+    def slow_simplify(scenes):
         # Simulates a PUT /segment/{id} landing mid-LLM-call.
         analysis = store["load"]("b", "analysis.json")
         analysis["segments"][0]["text"] = "EDITED DURING LLM CALL"

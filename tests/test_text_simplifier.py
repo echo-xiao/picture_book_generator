@@ -35,14 +35,14 @@ def test_single_scene_keeps_renumbered_llm_page(llm):
     # LLM is asked for 1 page and answers "page_number": 1 even when the real
     # page is 13 — the merge must still attach the text to the scene.
     llm["response"] = {"pages": [{"page_number": 1, "page_text": "Simple!", "scene_direction": "desk"}]}
-    out = ts.simplify_text([scene(13)], "4-6")
+    out = ts.simplify_text([scene(13)])
     assert len(out) == 1
     assert out[0]["page_text"] == "Simple!"
 
 
 def test_multi_scene_partial_run_preserves_real_page_numbers(llm):
     llm["response"] = {"pages": [{"page_number": 1, "page_text": "Text.", "scene_direction": "d"}]}
-    out = ts.simplify_text([scene(13), scene(29)], "4-6")
+    out = ts.simplify_text([scene(13), scene(29)])
     assert [p["page_number"] for p in out] == [13, 29]
 
 
@@ -53,7 +53,7 @@ def test_multi_scene_passes_previous_page_text_as_context(llm):
         return {"pages": [{"page_number": 1, "page_text": next(pages), "scene_direction": "d"}]}
 
     llm["response"] = respond
-    ts.simplify_text([scene(1), scene(2)], "4-6")
+    ts.simplify_text([scene(1), scene(2)])
     assert "First page text." in llm["calls"][1]
 
 
@@ -64,16 +64,10 @@ def test_extra_llm_pages_are_truncated(llm):
             {"page_number": 2, "page_text": "Hallucinated.", "scene_direction": "d"},
         ]
     }
-    out = ts.simplify_text([scene(1)], "4-6")
+    out = ts.simplify_text([scene(1)])
     assert len(out) == 1
     assert out[0]["page_text"] == "One."
 
 
-def test_invalid_age_group_falls_back(llm):
-    llm["response"] = {"pages": [{"page_number": 1, "page_text": "T.", "scene_direction": "d"}]}
-    out = ts.simplify_text([scene(1)], "not-an-age")
-    assert len(out) == 1
-
-
 def test_empty_scenes_returns_empty(llm):
-    assert ts.simplify_text([], "4-6") == []
+    assert ts.simplify_text([]) == []
