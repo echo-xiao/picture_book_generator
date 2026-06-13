@@ -157,21 +157,18 @@ export default function CharacterManagement({
         const poll = setInterval(async () => {
           if (unmountedRef.current) { clearInterval(poll); resolve(); return; }
           try {
-            const hist = await getCharacterSheetHistory(bookId, charName);
-            if (hist.images?.some(img => img.version === "current")) {
-              clearInterval(poll);
-              resolve();
-              return;
-            }
-            // No new sheet yet — if the backend dropped its regen claim, the
-            // run failed (it restores the old image, so the file watch can't tell).
+            // Claim is the SINGLE source of truth. The old "a 'current' sheet
+            // exists" check reported success even when a failed regen had just
+            // RESTORED the previous sheet (current always exists for a
+            // character that already had one), swallowing the real error.
             const st = await getRegenActive(bookId, "character", charName).catch(() => null);
-            if (st && st.active === false) {
+            if (!st || st.active !== false) return;  // still running (or transient fetch error)
+            clearInterval(poll);
+            if (st.error) {
               failed = true;
-              clearInterval(poll);
-              alert(`Regeneration failed: ${st?.error || "check your API key/quota and try again."}`);
-              resolve();
+              alert(`Regeneration failed: ${st.error}`);
             }
+            resolve();
           } catch {}
         }, 5000);
         // 240s: sheet regen may now self-correct (2x generate + 2x QA worst case)
@@ -220,23 +217,18 @@ export default function CharacterManagement({
             const poll = setInterval(async () => {
               if (unmountedRef.current) { clearInterval(poll); resolve(); return; }
               try {
-                const hist = await getCharacterSheetHistory(bookId, char.canonical_name);
-                if (hist.images?.some(img => img.version === "current")) {
-                  clearInterval(poll);
-                  resolve();
-                  return;
-                }
-                // No sheet yet — if the backend dropped its regen claim, the
-                // run failed (it restores the old image, so the file watch
-                // can't tell). Stop the whole run: the next ones (same
-                // key/quota) would fail the same way.
+                // Claim-first (same as the single-char path): a failed regen
+                // restores the old sheet, so "current exists" can't tell
+                // success from failure. Stop the whole run on failure — the
+                // next ones (same key/quota) would fail identically.
                 const st = await getRegenActive(bookId, "character", char.canonical_name).catch(() => null);
-                if (st && st.active === false) {
+                if (!st || st.active !== false) return;  // still running (or transient fetch error)
+                clearInterval(poll);
+                if (st.error) {
                   failed = true;
-                  clearInterval(poll);
-                  alert(`Regeneration failed: ${st?.error || "check your API key/quota and try again."}`);
-                  resolve();
+                  alert(`Regeneration failed: ${st.error}`);
                 }
+                resolve();
               } catch {}
             }, 10000);
             setTimeout(() => { clearInterval(poll); resolve(); }, 240000);
