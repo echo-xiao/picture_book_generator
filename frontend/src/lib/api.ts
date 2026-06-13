@@ -13,6 +13,11 @@ api.interceptors.request.use((config) => {
   if (typeof window !== "undefined") {
     const key = localStorage.getItem("pbg_api_key");
     if (key) config.headers["X-Gemini-Key"] = key;
+    // Tenant isolation: identify the caller so the server can verify they own
+    // the book they're mutating (any write to /api/book/{id} is owner-gated).
+    // Same email the library filter uses, so the owner of a book always matches.
+    const email = localStorage.getItem("pbg_email");
+    if (email) config.headers["X-User-Email"] = email;
   }
   return config;
 });

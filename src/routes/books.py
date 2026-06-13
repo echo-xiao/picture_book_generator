@@ -24,7 +24,7 @@ from starlette.concurrency import run_in_threadpool
 
 from src.config import GENERATED_DIR
 from src.core.models import GenerationConfig
-from src.routes.helpers import _load_json, _require_user_key, write_json_atomic
+from src.routes.helpers import _load_json, _require_user_key, book_owner_email, write_json_atomic
 from src.core.pipeline import delete_book
 
 logger = logging.getLogger(__name__)
@@ -789,12 +789,6 @@ def _book_status(book_id: str, generated_chapters: int) -> str:
     return "processing"
 
 
-def _book_owner(book_id: str) -> str:
-    """The email that created this book (from user.json), lowercased, or ''."""
-    info = _read_json_guarded(GENERATED_DIR / book_id / "preprocess" / "user.json")
-    return (info.get("email") or "").strip().lower() if isinstance(info, dict) else ""
-
-
 def _sample_book_ids() -> set[str]:
     """Book ids everyone can see (public samples). Configurable via env."""
     return {s.strip() for s in os.getenv("SAMPLE_BOOK_IDS", "the_great_gatsby").split(",") if s.strip()}
@@ -878,7 +872,7 @@ async def list_preprocessed_books(email: str | None = None) -> list[dict[str, An
     for bid, rec in books_by_id.items():
         is_sample = bid in samples
         rec["is_sample"] = is_sample
-        if is_sample or (viewer and _book_owner(bid) == viewer):
+        if is_sample or (viewer and book_owner_email(bid) == viewer):
             out.append(rec)
     return out
 

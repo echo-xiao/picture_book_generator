@@ -20,11 +20,13 @@ GCP_LOCATION = os.getenv("GCP_LOCATION", "global")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
 GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image")
 
-# BYOK gate. When true, generation endpoints require the caller's own Gemini key
-# (403 otherwise) so public users can't bill the project. When false (default),
-# generation falls back to the project backend (Vertex) — convenient while it's
-# just the owner testing; a user-supplied key is still honored if present.
-REQUIRE_USER_KEY = os.getenv("REQUIRE_USER_KEY", "false").lower() == "true"
+# BYOK gate. When true (the SECURE DEFAULT), generation endpoints require the
+# caller's own Gemini key (403 otherwise) so public visitors can't bill the
+# project's Vertex backend. Must be EXPLICITLY set to "false" to open generation
+# onto the project's own bill — a deliberate choice (e.g. local owner testing),
+# never the accidental default. A forgotten env var now fails safe (locked), not
+# open.
+REQUIRE_USER_KEY = os.getenv("REQUIRE_USER_KEY", "true").lower() != "false"
 
 # MongoDB
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")

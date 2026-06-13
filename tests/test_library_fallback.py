@@ -33,6 +33,9 @@ def test_library_endpoint_falls_back_to_disk(client, monkeypatch, tmp_path):
     owner, under the per-user isolation filter)."""
     monkeypatch.setattr("src.core.db.list_preprocess_books", lambda: [])
     monkeypatch.setattr("src.routes.books.GENERATED_DIR", tmp_path)
+    # Ownership filter reads helpers.book_owner_email (single source); patch its
+    # GENERATED_DIR too so the owner match resolves against the tmp tree.
+    monkeypatch.setattr("src.routes.helpers.GENERATED_DIR", tmp_path)
     pre = tmp_path / "somebook" / "preprocess"
     pre.mkdir(parents=True)
     (pre / "meta.json").write_text(json.dumps({"title": "Some Book", "num_chapters": 3}))

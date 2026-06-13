@@ -18,6 +18,9 @@ import src.routes.books as books
 @pytest.fixture()
 def library(monkeypatch, tmp_path):
     monkeypatch.setattr(books, "GENERATED_DIR", tmp_path)
+    # Ownership is read via helpers.book_owner_email (the single source); in prod
+    # both modules share one GENERATED_DIR, but tests patch per-module.
+    monkeypatch.setattr("src.routes.helpers.GENERATED_DIR", tmp_path)
     monkeypatch.setattr("src.core.db.list_preprocess_books", lambda: [])
     monkeypatch.setattr(books, "_load_json", lambda bid, fn: {})
     monkeypatch.setenv("SAMPLE_BOOK_IDS", "the_great_gatsby")

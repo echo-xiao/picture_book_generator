@@ -19,6 +19,18 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture(autouse=True)
+def _gate_off_by_default(monkeypatch):
+    """Pin REQUIRE_USER_KEY OFF for every test unless it opts in via the
+    `require_user_key` fixture. The production default is now ON (fail-safe), but
+    most tests exercise route logic that the gate would 403 before reaching — so
+    the suite's baseline is gate-off and gated behavior is tested explicitly. The
+    middlewares re-import REQUIRE_USER_KEY from src.config per dispatch, so
+    patching the module attribute is authoritative. (The default *value* itself
+    is verified in test_require_user_key_default.py, which reloads the module.)"""
+    monkeypatch.setattr("src.config.REQUIRE_USER_KEY", False)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_email(monkeypatch):
     """Safety net: clear email-sender credentials that .env's load_dotenv may
     have pulled into the environment, so no test ever sends a real email.

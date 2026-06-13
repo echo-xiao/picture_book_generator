@@ -45,18 +45,37 @@ DEPENDS_GATED_POSTS = [
 
 
 @pytest.mark.parametrize("path", DEPENDS_GATED_POSTS)
-def test_depends_belt_holds_without_middleware(client, require_user_key, monkeypatch, path):
+def test_depends_belt_holds_without_middleware(client, require_user_key, monkeypatch, tmp_path, path):
+    # Empty the BYOK suffix list so the middleware key-gate can't be what 403s —
+    # the route's own Depends(_require_user_key) belt must. But with the gate on,
+    # the ownership middleware now runs first; make "test-book" owned and present
+    # the matching email so the request reaches the route belt instead of being
+    # stopped at ownership.
     monkeypatch.setattr("src.app._GEN_SUFFIXES", ())
-    resp = client.post(path)
+    monkeypatch.setattr("src.routes.helpers.GENERATED_DIR", tmp_path)
+    import json
+    pre = tmp_path / "test-book" / "preprocess"
+    pre.mkdir(parents=True)
+    (pre / "user.json").write_text(json.dumps({"email": "owner@x.com"}))
+    resp = client.post(path, headers={"X-User-Email": "owner@x.com"})
     assert resp.status_code == 403, f"{path} lost its Depends gate: {resp.status_code}"
     assert "Gemini API key" in resp.json()["detail"]
 
 
-def test_non_generation_post_is_not_gated(client, require_user_key):
-    """Control: a non-generation path must NOT be blocked by the gate.
-    regen-status only has a GET route, so the router answers 405 — the point
-    is that it's not a middleware 403."""
-    resp = client.post("/api/book/test-book/segment/0/regen-status")
+def test_non_generation_post_is_not_gated(client, require_user_key, monkeypatch, tmp_path):
+    """Control: a non-generation path must NOT be blocked by the BYOK key-gate.
+    regen-status only has a GET route, so the router answers 405 — the point is
+    that it's not a middleware 403. The owner is set up and the matching email
+    presented so the ownership gate (which DOES guard book writes) lets it
+    through to the router; what's left is the 405, proving the BYOK suffix gate
+    isn't over-blocking a non-generation POST."""
+    import json
+    monkeypatch.setattr("src.routes.helpers.GENERATED_DIR", tmp_path)
+    pre = tmp_path / "test-book" / "preprocess"
+    pre.mkdir(parents=True)
+    (pre / "user.json").write_text(json.dumps({"email": "owner@x.com"}))
+    resp = client.post("/api/book/test-book/segment/0/regen-status",
+                       headers={"X-User-Email": "owner@x.com"})
     assert resp.status_code == 405
 
 

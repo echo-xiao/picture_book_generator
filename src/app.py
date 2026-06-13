@@ -47,6 +47,50 @@ app.add_middleware(
 )
 
 
+# Book-ownership middleware — tenant isolation. A book is created with its
+# creator's email (start_generation records it in preprocess/user.json); every
+# mutation of an EXISTING book (any POST/PUT/PATCH/DELETE to /api/book/{id}/...)
+# must come from that same owner. One gate here covers every existing AND future
+# write endpoint — there is no per-route check to forget, so a stray new regen
+# route can't silently reopen the hole. Reads (GET/HEAD) stay open: soft
+# isolation exists to stop a stranger deleting/regenerating someone else's book,
+# not to hide content. Enforced only when REQUIRE_USER_KEY is on — the same switch
+# that gates generation — so a local owner running with the gate off is never
+# locked out of their own files. Added BEFORE BookIdValidation so it executes
+# AFTER it (Starlette runs last-added outermost): by the time this gate runs the
+# book id is validated and, on generation endpoints, the BYOK key check has
+# already fired — this stays the innermost guard with a clean, single concern.
+# book_owner_email (helpers.py) is the single source of ownership, the same value
+# the library filter reads.
+_WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_BOOK_WRITE_RE = re.compile(r"^/api/book/([^/]+)")
+
+
+class BookOwnershipMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        from src.config import REQUIRE_USER_KEY
+        if REQUIRE_USER_KEY and request.method in _WRITE_METHODS:
+            m = _BOOK_WRITE_RE.match(request.url.path)
+            if m:
+                from src.routes.helpers import book_owner_email
+                owner = book_owner_email(m.group(1))
+                caller = (request.headers.get("x-user-email") or "").strip().lower()
+                # owner == "" → unowned (a public sample, or a legacy book with no
+                # recorded creator): no caller can match, so it is locked against
+                # mutation rather than open to all. The owner must present the
+                # email the book was created with.
+                if not owner or caller != owner:
+                    return JSONResponse(
+                        {"detail": "This book belongs to another account — open it "
+                                   "from the email/device that created it."},
+                        status_code=403,
+                    )
+        return await call_next(request)
+
+
+app.add_middleware(BookOwnershipMiddleware)
+
+
 # Book-id validation middleware — every /api/book/{book_id}/... route builds
 # filesystem paths from the raw path segment (GENERATED_DIR / book_id), so a
 # traversal value like ".." could read or delete outside the books tree.

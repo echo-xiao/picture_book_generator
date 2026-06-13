@@ -50,6 +50,20 @@ def book_regen_active(book_id: str) -> bool:
 _last_regen_errors: dict[tuple[str, str, Any], str] = {}
 
 
+def book_owner_email(book_id: str) -> str:
+    """The email that created this book (from user.json), lowercased, or ''.
+
+    The single source of book ownership — read by the ownership middleware
+    (app.py) so EVERY write to a book is gated in one place, not per-endpoint.
+    """
+    path = GENERATED_DIR / book_id / "preprocess" / "user.json"
+    try:
+        info = json.loads(path.read_text(encoding="utf-8"))
+        return (info.get("email") or "").strip().lower() if isinstance(info, dict) else ""
+    except (OSError, ValueError):
+        return ""
+
+
 def _require_user_key(x_gemini_key: str | None = Header(default=None)) -> str | None:
     """BYOK gate (only enforced when REQUIRE_USER_KEY=true).
 
