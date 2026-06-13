@@ -132,7 +132,7 @@ export default function EditorPage() {
   const [checkingQuality, setCheckingQuality] = useState(false);
 
   // Agent Activity Panel (open by default so the live agent log is always visible)
-  const [agentPanelOpen, setAgentPanelOpen] = useState(true);
+  const [agentPanelOpen, setAgentPanelOpen] = useState(false);
 
   // BYOK: the editor is read-only unless the visitor supplied their own Gemini
   // key (generation endpoints also enforce this server-side with a 403).

@@ -149,11 +149,22 @@ def heal_if_local_fresher(book_id: str, filename: str, mongo_updated: str | None
     return file_data
 
 
-def _load_json(book_id: str, filename: str) -> dict | list | None:
-    """Load preprocess data from MongoDB first, fall back to local JSON file.
+def _load_json(book_id: str, filename: str, prefetched=None) -> dict | list | None:
+    """THE single accessor for a preprocess file — every reader (web routes AND
+    the chapter subprocess) goes through here, so the read strategy lives in one
+    place and can't drift into two.
 
-    Mongo is the authority; heal_if_local_fresher repairs a doc left stale by a
-    failed Mongo write so Mongo-first reads never shadow a fresher file.
+    Both stores are deliberately kept: the local file is fast same-machine IPC
+    for the subprocess / PDF / status polling, MongoDB is the persistent,
+    cross-instance authority. Mongo is authoritative; heal_if_local_fresher
+    repairs a doc left stale by a failed Mongo write so a Mongo-first read never
+    shadows a fresher file.
+
+    `prefetched` is an already-fetched copy of this doc from another transport to
+    the SAME Mongo (the MongoDB-MCP batch read the subprocess does for the
+    partner integration). It is a same-tier fallback used ONLY when the pymongo
+    read returns nothing — it never overrides Mongo's authority or the heal, so
+    folding it in here keeps it from being a second strategy.
     """
     path = GENERATED_DIR / book_id / "preprocess" / filename
 
@@ -171,7 +182,10 @@ def _load_json(book_id: str, filename: str) -> dict | list | None:
         healed = heal_if_local_fresher(book_id, filename, mongo_updated)
         return healed if healed is not None else mongo_data
 
-    # Fallback to local file
+    # Mongo had no doc (or was unreachable): prefer an already-fetched copy from
+    # the alternate same-Mongo transport, else the local file.
+    if prefetched is not None:
+        return prefetched
     if not path.exists():
         return None
     try:

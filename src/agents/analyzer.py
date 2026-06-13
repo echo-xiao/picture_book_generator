@@ -8,7 +8,6 @@ Responsible for:
 
 from __future__ import annotations
 
-import json
 import logging
 
 from src.config import GENERATED_DIR
@@ -26,67 +25,37 @@ class AnalyzerAgent:
     def load_preprocess(self) -> dict:
         """Load all preprocessed data for a book.
 
-        Read path priority (each best-effort, falling through on failure):
-          1. MongoDB MCP server (Model Context Protocol) — the partner
-             integration: data is fetched via the official mongodb-mcp-server
-             over stdio.
-          2. Direct pymongo read of the same preprocess_files documents.
-          3. Local JSON files on disk.
-        Preprocess writes each JSON doc to MongoDB and disk, so all three
-        return the identical structure — no field mapping needed.
+        Every file is resolved through the ONE shared accessor
+        helpers._load_json (Mongo-authoritative + freshness heal + file
+        fallback) — the exact same read strategy the web routes use, so the
+        subprocess and the editor can never resolve to different versions.
+
+        The MongoDB-MCP server (the partner integration) is read once as a batch
+        prefetch and handed to the accessor as a same-Mongo fallback candidate;
+        it is NOT a separate read strategy — the accessor still decides authority
+        and healing in one place.
         """
         names = ["meta", "chapters", "full_text", "analysis", "chapter_segments"]
-        data: dict = {}
 
-        # 1) MongoDB MCP server (partner integration).
+        # MongoDB MCP batch prefetch (partner integration) — best-effort; an
+        # alternate transport to the SAME preprocess_files docs. Passed to the
+        # accessor below as a fallback, never as an override.
+        mcp_data: dict = {}
         try:
             from src.core.mcp_client import load_preprocess_files_via_mcp
-            mcp_data = load_preprocess_files_via_mcp(self.book_id, names)
+            mcp_data = load_preprocess_files_via_mcp(self.book_id, names) or {}
             if mcp_data:
-                data.update(mcp_data)
-                logger.info("load_preprocess: %d/%d docs via MongoDB MCP server for %s",
+                logger.info("load_preprocess: %d/%d docs prefetched via MongoDB MCP server for %s",
                             len(mcp_data), len(names), self.book_id)
         except Exception as e:
             logger.warning("load_preprocess: MCP path unavailable (%s)", e)
 
-        # 2) Direct pymongo fallback for anything MCP didn't return.
-        if len(data) < len(names):
-            try:
-                from src.core.db import load_preprocess_file, is_available
-                if is_available():
-                    for name in names:
-                        if name in data:
-                            continue
-                        doc = load_preprocess_file(self.book_id, f"{name}.json")
-                        if doc is not None:
-                            data[name] = doc
-            except Exception as e:
-                logger.warning("load_preprocess: pymongo fallback failed (%s)", e)
-
-        # 3) Local file fallback.
+        from src.routes.helpers import _load_json
+        data: dict = {}
         for name in names:
-            if name in data:
-                continue
-            path = self.preprocess_dir / f"{name}.json"
-            if path.exists():
-                data[name] = json.loads(path.read_text(encoding="utf-8"))
-
-        # 4) Same freshness heal the web read uses, so the subprocess and the
-        #    editor resolve to ONE MongoDB-authoritative version. A Mongo write
-        #    that failed during an edit left the doc stale; without this the
-        #    generator drew from pre-edit data while the editor showed the edit.
-        from src.routes.helpers import heal_if_local_fresher
-        try:
-            from src.core.db import load_preprocess_file_with_meta
-            for name in names:
-                meta = load_preprocess_file_with_meta(self.book_id, f"{name}.json")
-                if meta is None:
-                    continue
-                fresher = heal_if_local_fresher(self.book_id, f"{name}.json", meta[1])
-                if fresher is not None:
-                    data[name] = fresher
-        except Exception as e:
-            logger.debug("load_preprocess freshness pass skipped: %s", e)
+            val = _load_json(self.book_id, f"{name}.json", prefetched=mcp_data.get(name))
+            if val is not None:
+                data[name] = val
 
         if not data:
             # This is a library method (also imported into the server process),
