@@ -294,17 +294,33 @@ async def update_character(book_id: str, char_name: str, update: CharacterUpdate
                 alias_map[alias] = char_name
         _save_json(book_id, "alias_map.json", alias_map)
 
-    # Sync to MongoDB
+    # Sync to the `characters` collection — the consistency hub that
+    # load_characters (and thus all generation) reads FIRST. If Mongo is
+    # reachable but THIS write fails, the hub keeps the old data while the file
+    # + analysis have the new: a silent divergence that makes generation use a
+    # stale character. Surface it instead of reporting an unqualified success.
+    # (A fully-down Mongo is fine — load_characters falls back to the file.)
+    hub_reachable = False
+    hub_ok = False
     try:
-        from src.core.db import update_character as db_update_char
-        db_update_char(book_id, char_name, update_dict)
+        from src.core.db import update_character as db_update_char, is_available
+        hub_reachable = is_available()
+        if hub_reachable:
+            hub_ok = db_update_char(book_id, char_name, update_dict)
     except Exception as e:
-        logger.debug("MongoDB sync skipped for character %s: %s", char_name, e)
+        logger.warning("Characters-hub write failed for %s: %s", char_name, e)
 
     if renamed:
         _cascade_character_rename(book_id, char_name, new_name)
 
-    return {"status": "updated", "character": new_name, "updated_fields": list(update_dict.keys())}
+    result = {"status": "updated", "character": new_name, "updated_fields": list(update_dict.keys())}
+    if hub_reachable and not hub_ok:
+        result["degraded"] = True
+        result["warning"] = (
+            "Saved locally, but the MongoDB consistency hub did not confirm the write — "
+            "generation may use stale character data until you retry."
+        )
+    return result
 
 
 @router.post("/api/book/{book_id}/preprocess/characters/{char_name}/autofill")
