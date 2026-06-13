@@ -18,6 +18,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+@pytest.fixture(autouse=True)
+def _no_real_email(monkeypatch):
+    """Safety net: clear email-sender credentials that .env's load_dotenv may
+    have pulled into the environment, so no test ever sends a real email.
+    Tests that exercise a sender set their own creds + patch the transport."""
+    for var in ("RESEND_API_KEY", "SMTP_USER", "SMTP_PASSWORD", "FEEDBACK_EMAIL_TO"):
+        monkeypatch.delenv(var, raising=False)
+
+
 @pytest.fixture()
 def client():
     """TestClient that returns 500s instead of raising server exceptions."""

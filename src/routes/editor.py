@@ -390,21 +390,36 @@ Return JSON:
 
 
 def load_special_records(book_id: str) -> dict[str, dict]:
-    """Special-page records: preprocess-written special_pages.json, or the
-    SAME deterministic derivation for books processed before the file existed
-    (no re-preprocess needed). Shared by the editor and the regen endpoints."""
+    """Special-page records, reconciled against current analysis.
+
+    The derived fields (characters_in_scene, scene_background, summaries…) are
+    ALWAYS recomputed from the live analysis, so a character/scene rename — or
+    any segment edit — propagates to the covers with no per-rename cascade. Only
+    the fields the user explicitly edited (tracked in each record's `_edited`)
+    are overlaid on top. This is the single reconciliation point shared by the
+    editor and the regen endpoints; special_pages.json is now an edit overlay,
+    not an authoritative snapshot (legacy full-record files have no `_edited`,
+    so they refresh cleanly).
+    """
     from src.generation.special_page_data import derive_special_pages
 
-    data = _load_json(book_id, "special_pages.json")
-    if isinstance(data, dict) and isinstance(data.get("pages"), dict) and data["pages"]:
-        return data["pages"]
     analysis = _load_json(book_id, "analysis.json") or {}
     meta = _load_json(book_id, "meta.json") or {}
     ch_map = _load_json(book_id, "chapter_segments.json") or {}
     locs = (_load_json(book_id, "llm_locations.json") or {}).get("locations", [])
-    return derive_special_pages(
+    records = derive_special_pages(
         meta.get("title", book_id), analysis.get("segments", []), ch_map, locs,
     )
+
+    stored = _load_json(book_id, "special_pages.json")
+    if isinstance(stored, dict) and isinstance(stored.get("pages"), dict):
+        for key, rec in stored["pages"].items():
+            if key not in records or not isinstance(rec, dict):
+                continue
+            for field in rec.get("_edited") or []:
+                if field in rec:
+                    records[key][field] = rec[field]
+    return records
 
 
 def _special_image_url(book_id: str, base: str) -> str | None:
@@ -464,10 +479,9 @@ class SpecialPageUpdate(BaseModel):
 async def update_special_page(
     book_id: str, page_type: str, update: SpecialPageUpdate, chapter: int = 0,
 ) -> dict[str, Any]:
-    """Edit a special page's record (same merge-under-lock pattern as segments).
-
-    First write for a legacy book persists the derived defaults for ALL pages
-    (bootstrap-on-first-write, like chapter_data's upsert)."""
+    """Edit a special page's record. Persists ONLY the edited fields as an
+    overlay (with an `_edited` marker); the derived base is recomputed on read,
+    so a later rename keeps refreshing the un-edited fields."""
     from src.generation.special_page_data import SPECIAL_TYPES, special_key
 
     if page_type not in SPECIAL_TYPES:
@@ -480,8 +494,18 @@ async def update_special_page(
         rec = records.get(key)
         if rec is None:
             raise HTTPException(status_code=404, detail=f"Special page '{key}' not found.")
+        # Save just the user's edits, not the derived base.
+        stored = _load_json(book_id, "special_pages.json")
+        pages = stored.get("pages") if isinstance(stored, dict) and isinstance(stored.get("pages"), dict) else {}
+        overlay = pages.get(key) if isinstance(pages.get(key), dict) else {}
+        edited = set(overlay.get("_edited") or [])
+        for field, value in update_dict.items():
+            overlay[field] = value
+            edited.add(field)
+        overlay["_edited"] = sorted(edited)
+        pages[key] = overlay
+        _save_json(book_id, "special_pages.json", {"pages": pages})
         rec.update(update_dict)
-        _save_json(book_id, "special_pages.json", {"pages": records})
     return {"status": "updated", "key": key, "page": rec}
 
 

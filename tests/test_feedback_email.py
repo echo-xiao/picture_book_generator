@@ -61,6 +61,10 @@ def test_submit_feedback_succeeds_even_if_email_raises(client, monkeypatch):
 
 
 def test_email_sends_when_configured(monkeypatch):
+    # Isolate the SMTP path: clear any RESEND_API_KEY that .env's load_dotenv
+    # pulled into the environment, so this never makes a real network call.
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.delenv("FEEDBACK_EMAIL_TO", raising=False)
     monkeypatch.setenv("SMTP_USER", "owner@gmail.com")
     monkeypatch.setenv("SMTP_PASSWORD", "app-password")
     captured = {}
