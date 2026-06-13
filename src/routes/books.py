@@ -17,11 +17,14 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 
 from src.config import GENERATED_DIR
 from src.core.models import GenerationConfig
-from src.routes.helpers import _require_user_key, write_json_atomic
+from src.routes.helpers import _load_json, _require_user_key, write_json_atomic
 from src.core.pipeline import delete_book
 
 logger = logging.getLogger(__name__)
@@ -478,6 +481,58 @@ async def usage_digest(token: str = "", hours: int = 24) -> dict[str, Any]:
     emailed = _send_owner_email(f"📊 Story Sprout usage — last {hours}h",
                                 _format_usage_digest(data, hours))
     return {"emailed": emailed, **data}
+
+
+@router.get("/api/book/{book_id}/pdf")
+async def download_book_pdf(book_id: str) -> FileResponse:
+    """Build the book PDF on demand from chapter_data + special pages — the
+    single source of truth the editors already maintain — so it can never go
+    stale. No pre-generated book.pdf to keep in sync across N edit endpoints;
+    the PDF is derived per request and streamed back.
+    """
+    import re as _re
+    import tempfile
+
+    book_dir = GENERATED_DIR / book_id
+    chapters_root = book_dir / "chapters"
+    all_chapters = []
+    if chapters_root.exists():
+        for ch_dir in sorted(chapters_root.glob("ch*")):
+            data = _read_json_guarded(ch_dir / "chapter_data.json")
+            if isinstance(data, dict) and data.get("pages"):
+                all_chapters.append(data)
+    if not all_chapters:
+        raise HTTPException(status_code=404, detail="No generated pages yet — generate a chapter first.")
+
+    all_chapters.sort(key=lambda c: c.get("chapter_idx", 0))
+    combined: list[dict] = []
+    for ch in all_chapters:
+        ch_num = ch.get("chapter_idx", 0) + 1
+        for p in ch.get("pages", []):
+            p["_chapter_num"] = ch_num
+            combined.append(p)
+
+    title = (_load_json(book_id, "meta.json") or {}).get("title", book_id)
+    special_dir = str(book_dir / "special")
+
+    from src.renderer.pdf_export import export_pdf
+    fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
+    os.close(fd)
+    try:
+        await run_in_threadpool(export_pdf, combined, title, tmp_path, special_dir=special_dir)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        logger.exception("On-demand PDF build failed for %s", book_id)
+        raise HTTPException(status_code=500, detail="PDF build failed.")
+
+    safe = _re.sub(r"[^\w.-]", "_", title)[:60] or "book"
+    return FileResponse(
+        tmp_path, media_type="application/pdf", filename=f"{safe}.pdf",
+        background=BackgroundTask(lambda: os.path.exists(tmp_path) and os.unlink(tmp_path)),
+    )
 
 
 @router.post("/api/feedback")

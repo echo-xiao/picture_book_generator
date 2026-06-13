@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 
-import { ChevronLeft, ChevronRight, Edit3 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Edit3, Download } from "lucide-react";
 import { getChapters, getChapterSegments } from "@/lib/api";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
@@ -135,6 +135,13 @@ export default function BookViewerPage() {
           <span className="text-white/50 text-xs">
             {currentPage + 1} / {pages.length}
           </span>
+          {/* Built on demand from chapter_data — always current. */}
+          <a
+            href={`${API_BASE}/api/book/${bookId}/pdf`}
+            className="text-xs bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1"
+          >
+            <Download size={12} /> PDF
+          </a>
           {/* Full navigation: the editor reads window.location.search in useState
               initializers, which a soft router.push would leave stale. */}
           <button

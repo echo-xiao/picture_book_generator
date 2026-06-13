@@ -169,9 +169,9 @@ def main():
         generate_chapter(args.book, data, ch_idx, page_filter=page_filter,
                          self_correct=args.self_correct, defer_text_sync=args.defer_text_sync)
 
-    # Rebuild the PDF from ALL generated chapters, not just the one(s) just
-    # generated — otherwise regenerating one chapter clobbers the full-book PDF.
-    build_combined_pdf(args.book, data)
+    # No pre-built book.pdf: the GET /api/book/{id}/pdf endpoint derives it on
+    # demand from chapter_data, so it can never go stale. (--pdf-only still
+    # builds a file for offline/CLI use.)
 
 
 if __name__ == "__main__":
